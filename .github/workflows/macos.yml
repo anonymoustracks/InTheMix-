@@ -96,7 +96,14 @@ jobs:
       - name: Package (DMG)
         run: |
           chmod +x buildscripts/packaging/MacOS/make_inthemix_mac.sh
-          buildscripts/packaging/MacOS/make_inthemix_mac.sh "$PWD/build" "$PWD/dist/stage" "$PWD/dist"
+          set +e
+          buildscripts/packaging/MacOS/make_inthemix_mac.sh "$PWD/build" "$PWD/dist/stage" "$PWD/dist" 2>&1 | tee package.log
+          st=${PIPESTATUS[0]}
+          if [ "$st" -ne 0 ]; then
+            # The end of the log as an annotation: readable without signing in.
+            echo "::error title=Package failed::$(tail -n 40 package.log | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+            exit "$st"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
