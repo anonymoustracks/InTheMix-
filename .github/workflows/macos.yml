@@ -1,0 +1,108 @@
+# InTheMix by Anonymous Tracks -- the Mac app (Apple Silicon), built by GitHub.
+# Run it from the Actions tab ("Run workflow") or by pushing a tag v*.
+# The DMG (unsigned, ad-hoc) is attached to the run as an artifact.
+name: macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: [ "v*" ]
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 360
+    env:
+      QT_VERSION: "6.10.3"
+      ORT_VERSION: "1.18.0"
+      FFMPEG_VERSION: "7.1.1"
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Tools
+        run: brew install ninja nasm pkg-config || true
+
+      - name: Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qt5compat qtnetworkauth qtshadertools qtwebsockets qtimageformats
+          cache: true
+
+      - name: ONNX Runtime and Beat This! model
+        run: |
+          mkdir -p mixhouse_deps/beat_this
+          curl -fsSL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-arm64-${ORT_VERSION}.tgz"
+          tar xzf ort.tgz
+          mv "onnxruntime-osx-arm64-${ORT_VERSION}" "mixhouse_deps/onnxruntime-${ORT_VERSION}"
+          ls mixhouse_deps/onnxruntime-${ORT_VERSION}/lib
+          # The model is in Git LFS in beat_this_cpp: media.githubusercontent.com serves the real file.
+          curl -fsSL -o mixhouse_deps/beat_this/beat_this.onnx \
+            "https://media.githubusercontent.com/media/mosynthkey/beat_this_cpp/07ab790a9ec2/onnx/beat_this.onnx" \
+            || curl -fsSL -o mixhouse_deps/beat_this/beat_this.onnx \
+            "https://raw.githubusercontent.com/mosynthkey/beat_this_cpp/07ab790a9ec2/onnx/beat_this.onnx"
+          ls -la mixhouse_deps/beat_this
+          shasum -a 256 mixhouse_deps/beat_this/beat_this.onnx
+
+      - name: FFmpeg (LGPL, shared)
+        run: |
+          curl -fsSL -o ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          tar xf ffmpeg.tar.xz
+          cd "ffmpeg-${FFMPEG_VERSION}"
+          ./configure --prefix="$PWD/../ffmpeg-out" --enable-shared --disable-static \
+            --disable-programs --disable-doc --disable-avdevice --disable-avfilter --disable-swscale \
+            --disable-network --disable-autodetect --enable-audiotoolbox \
+            --install-name-dir='@loader_path' --arch=arm64
+          make -j4
+          make install
+          mkdir -p ../dist/ffmpeg
+          cp -a ../ffmpeg-out/lib/*.dylib ../dist/ffmpeg/
+          cp LICENSE.md COPYING.LGPLv2.1 ../dist/ffmpeg/ 2>/dev/null || true
+          ls -la ../dist/ffmpeg
+
+      - name: Configure
+        run: |
+          TESTS_OFF=""
+          for t in AU_BUILD_APPSHELL_TESTS AU_BUILD_AU3AUDIO_TESTS AU_BUILD_AUTOMATION_TESTS AU_BUILD_CONTEXT_TESTS \
+                   AU_BUILD_EFFECTS_TESTS AU_BUILD_IMPORT_TESTS AU_BUILD_PLAYBACK_TESTS AU_BUILD_PREFERENCES_TESTS \
+                   AU_BUILD_PROJECTSCENE_TESTS AU_BUILD_PROJECT_TESTS AU_BUILD_RECORD_TESTS AU_BUILD_SHARED_TESTS \
+                   AU_BUILD_TRACKEDIT_TESTS AU_BUILD_UICOMPONENTS_TESTS MIXHOUSE_BUILD_AUTOMATION_DATA_TESTS \
+                   MIXTAPE_BUILD_ENGINE_TESTS MUSE_ENABLE_UNIT_TESTS; do
+            TESTS_OFF="$TESTS_OFF -D$t=OFF"
+          done
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/dist/stage" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            $TESTS_OFF
+
+      - name: Build
+        run: cmake --build build --parallel 3
+
+      - name: Install
+        run: cmake --install build
+
+      - name: Package (DMG)
+        run: |
+          chmod +x buildscripts/packaging/MacOS/make_inthemix_mac.sh
+          buildscripts/packaging/MacOS/make_inthemix_mac.sh "$PWD/build" "$PWD/dist/stage" "$PWD/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InTheMix-mac-arm64
+          path: dist/*.dmg
+          retention-days: 30
+
+      - name: Build log on failure
+        if: failure()
+        run: |
+          ls -la build || true
+          tail -n 200 build/CMakeFiles/CMakeError.log 2>/dev/null || true
