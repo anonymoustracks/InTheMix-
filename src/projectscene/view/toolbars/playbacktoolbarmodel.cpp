@@ -1,0 +1,786 @@
+#include <map>
+#include <QTimer>
+#include <QSettings>
+/*
+* Audacity: A Digital Audio Editor
+*/
+#include "playbacktoolbarmodel.h"
+
+#include <algorithm>
+
+#include <QQmlContext>
+#include <QQmlEngine>
+
+#include "framework/global/containers.h"
+
+#include "internal/projectsceneuiactions.h"
+
+#include "playback/view/toolbars/playbacktoolbarlevelitem.h"
+#include "playback/view/toolbars/playbacktoolbarcontrolitem.h"
+#include "playback/view/toolbars/playbacktoolbartimeitem.h"
+#include "playback/view/toolbars/playbacktoolbarbpmitem.h"
+#include "playback/view/toolbars/playbacktoolbartimesignatureitem.h"
+#include "record/view/toolbars/playbacktoolbarrecordlevelitem.h"
+#include "projectscene/view/toolbars/snaptoolbaritem.h"
+#include "projectscene/view/toolbars/metronometoolbaritem.h"
+#include "projectscene/view/toolbars/performtoolbaritem.h"
+#include "projectscene/view/toolbars/broadcasttoolbaritem.h"
+#include "projectscene/view/toolbars/tempobpmtoolbaritem.h"
+#include "projectscene/view/toolbars/mixtapeslidertoolbaritem.h"
+
+using namespace muse::uicomponents;
+using namespace muse::ui;
+using namespace muse::actions;
+using namespace au::projectscene;
+using namespace au::playback;
+
+static const QString TOOLBAR_NAME("playbackToolBar");
+
+static const ActionQuery PLAYBACK_TOGGLE_PLAY_PAUSE_QUERY("action://playback/toggle-play-pause");
+static const ActionQuery PLAYBACK_STOP_QUERY("action://playback/stop");
+
+static const ActionQuery RECORD_START_QUERY("action://record/start");
+static const ActionQuery RECORD_PAUSE_QUERY("action://record/pause");
+static const ActionQuery RECORD_STOP_QUERY("action://record/stop");
+static const ActionQuery RECORD_LEVEL_QUERY("action://record/level");
+
+static const ActionQuery PLAYBACK_REWIND_START_QUERY("action://playback/rewind-start");
+static const ActionQuery PLAYBACK_REWIND_END_QUERY("action://playback/rewind-end");
+static const ActionCode LOOP_ACTION_CODE("toggle-loop-region");
+
+//! The red of PERFORM and of its Stop: the audience is listening. Kept in step
+//! with the literal in PlaybackToolBar.qml's text-toggle component.
+static const QColor PERFORM_COLOR("#E5484D");
+
+static const ActionCode CLIP_GAIN_AUTOMATION_CODE("clip-gain");
+static const ActionCode SPLIT_TOOL_ACTION_CODE("split-tool");
+
+static const ActionCode TOGGLE_GLOBAL_SPECTROGRAM_VIEW_ACTION_CODE("action://trackedit/global-view-spectrogram");
+
+static const ActionQuery PLAYBACK_LEVEL_QUERY("action://playback/level");
+static const ActionCode PLAYBACK_TIME("playback-time");
+static const ActionCode PLAYBACK_BPM("playback-bpm");
+static const ActionCode PLAYBACK_TIME_SIGNATURE("playback-time-signature");
+
+static const ActionCode SNAP_ACTION_CODE("snap");
+
+static PlaybackToolBarModel::ItemType itemType(const ActionCode& actionCode)
+{
+    std::map<ActionCode, PlaybackToolBarModel::ItemType> types = {
+        { PLAYBACK_LEVEL_QUERY.toString(), PlaybackToolBarModel::PLAYBACK_LEVEL },
+        { PLAYBACK_TIME, PlaybackToolBarModel::PLAYBACK_TIME },
+        { PLAYBACK_BPM, PlaybackToolBarModel::PLAYBACK_BPM },
+        { PLAYBACK_TIME_SIGNATURE, PlaybackToolBarModel::PLAYBACK_TIME_SIGNATURE },
+        { RECORD_LEVEL_QUERY.toString(), PlaybackToolBarModel::RECORD_LEVEL },
+        { PLAYBACK_TOGGLE_PLAY_PAUSE_QUERY.toString(), PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { PLAYBACK_STOP_QUERY.toString(), PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { RECORD_START_QUERY.toString(), PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { PLAYBACK_REWIND_START_QUERY.toString(), PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { PLAYBACK_REWIND_END_QUERY.toString(), PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { LOOP_ACTION_CODE, PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { CLIP_GAIN_AUTOMATION_CODE, PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { SPLIT_TOOL_ACTION_CODE, PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { TOGGLE_GLOBAL_SPECTROGRAM_VIEW_ACTION_CODE, PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { SNAP_ACTION_CODE, PlaybackToolBarModel::SNAP },
+        { "metronome", PlaybackToolBarModel::METRONOME },
+        { "mixhouse-sync", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-tempo-lane", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-energy-lane", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-transition-labels", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-keylock", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-match-keys", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-link", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-mix-now", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-automation-arm", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-reenable-automation", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-perform", PlaybackToolBarModel::TEXT_TOGGLE },
+        { "mixhouse-broadcast", PlaybackToolBarModel::BROADCAST },
+        { "mixhouse-reset-performance", PlaybackToolBarModel::PLAYBACK_CONTROL },
+        { "mixtape-track-height", PlaybackToolBarModel::SLIDER },
+        { "mixtape-zoom-slider", PlaybackToolBarModel::SLIDER }
+    };
+
+    return muse::value(types, actionCode, PlaybackToolBarModel::PROJECT_CONTROL);
+}
+
+PlaybackToolBarModel::PlaybackToolBarModel(QObject* parent)
+    : AbstractToolBarModel(parent)
+{
+}
+
+void PlaybackToolBarModel::resetView()
+{
+    viewActions()->dispatch("mixtape-view-reset");
+}
+
+double PlaybackToolBarModel::waveformScale() const
+{
+    return projectSceneUiState() ? projectSceneUiState()->waveformScale() : 1.0;
+}
+
+void PlaybackToolBarModel::setWaveformScale(double scale)
+{
+    if (projectSceneUiState()) {
+        projectSceneUiState()->setWaveformScale(scale);
+    }
+}
+
+void PlaybackToolBarModel::load()
+{
+    if (!m_inited) {
+        if (projectSceneUiState()) {
+            projectSceneUiState()->waveformScaleChanged().onNotify(this, [this]() {
+                emit waveformScaleChanged();
+            });
+        }
+        uiState()->toolConfigChanged(TOOLBAR_NAME).onNotify(this, [this]() {
+            reload();
+        });
+
+        uiConfiguration()->currentThemeChanged().onNotify(this, [this]() {
+            reload();
+        });
+
+        context()->currentProjectChanged().onNotify(this, [this]() {
+            reload();
+            emit isEnabledChanged();
+            if (context()->currentProject()) {
+                setupProjectConnections(*context()->currentProject());
+            }
+        });
+        if (context()->currentProject()) {
+            setupProjectConnections(*context()->currentProject());
+        }
+
+        playbackUiState()->playbackMeterPositionChanged().onNotify(this, [this]() {
+            reload();
+        });
+
+        uicontextResolver()->currentUiContextChanged().onNotify(this, [this]() {
+            if (m_heldStateChanges.empty() || uicontextResolver()->currentUiContext() == context::UiCtxDialogOpened) {
+                return;
+            }
+            const muse::actions::ActionCodeList held = std::move(m_heldStateChanges);
+            m_heldStateChanges.clear();
+            onActionsStateChanges(held);
+        });
+
+        m_inited = true;
+    }
+
+    // GlideMix: a change can arrive (e.g. Perform mode ending on its own)
+    // while this toolbar's QML is being torn down. New items then have no
+    // context to get their services from, and building them crashed.
+    const QQmlContext* qml = qmlContext(this);
+    if (!qml || !qml->engine()) {
+        return;
+    }
+
+    updateActions();
+
+    AbstractToolBarModel::load();
+}
+
+void PlaybackToolBarModel::hideItem(const QString& code)
+{
+    muse::ui::ToolConfig config = uiState()->toolConfig(TOOLBAR_NAME, ProjectSceneUiActions::defaultPlaybackToolBarConfig());
+    bool found = false, styled = false, grouped = false;
+    for (muse::ui::ToolConfig::Item& item : config.items) {
+        if (item.intent == code.toStdString() && item.show) {
+            item.show = false;
+            found = true;
+        }
+        styled = styled || item.intent.rfind("glidemix-toolbar-style-", 0) == 0;
+        grouped = grouped || item.intent == "glidemix-toolbar-groups-1";
+    }
+    if (!found) {
+        return;
+    }
+    // Arranged by hand from now on, as after Customize Toolbar: the toolbar
+    // moves nothing for it.
+    if (!styled) {
+        config.items.append(muse::ui::ToolConfig::Item("glidemix-toolbar-style-" + std::to_string(m_displayStyle), false));
+    }
+    if (!grouped) {
+        config.items.append(muse::ui::ToolConfig::Item("glidemix-toolbar-groups-1", false));
+    }
+    uiState()->setToolConfig(TOOLBAR_NAME, config);
+}
+
+void PlaybackToolBarModel::reload()
+{
+    load();
+    updateStates();
+}
+
+void PlaybackToolBarModel::setupProjectConnections(project::IAudacityProject& project)
+{
+    const auto vs = project.viewState();
+    vs->clipGainAutomationEnabled().ch.onReceive(this, [this](bool){ updateClipGainAutomationState(); });
+    vs->splitToolEnabled().ch.onReceive(this, [this](bool){ updateSplitState(); });
+    vs->globalSpectrogramToggleIsOnChanged().onNotify(this, [this] { updateGlobalSpectrogramViewState(); });
+}
+
+void PlaybackToolBarModel::onActionsStateChanges(const muse::actions::ActionCodeList& codes)
+{
+    if (uicontextResolver()->currentUiContext() == context::UiCtxDialogOpened) {
+        // Not dropped: a button changed from Preferences kept its old look
+        // after the dialog closed (GlideMix, 2026-11-15).
+        for (const muse::actions::ActionCode& code : codes) {
+            if (!containsAction(m_heldStateChanges, code)) {
+                m_heldStateChanges.push_back(code);
+            }
+        }
+        return;
+    }
+
+    if (containsAction(codes, PLAYBACK_TOGGLE_PLAY_PAUSE_QUERY.toString())
+        || containsAction(codes, RECORD_PAUSE_QUERY.toString())) {
+        updatePlayState();
+    }
+
+    if (containsAction(codes, PLAYBACK_STOP_QUERY.toString()) || containsAction(codes, RECORD_STOP_QUERY.toString())) {
+        updateStopState();
+    }
+
+    if (containsAction(codes, RECORD_START_QUERY.toString())) {
+        updateRecordState();
+    }
+
+    if (containsAction(codes, LOOP_ACTION_CODE)) {
+        updateLoopState();
+    }
+
+    if (containsAction(codes, "mixhouse-perform") || containsAction(codes, "mixhouse-reset-performance")) {
+        updatePerformStopState();
+    }
+
+    // Secondary menus (right-click PERFORM) keep the state they were built
+    // with unless refreshed here.
+    for (ToolBarItem* toolBarItem : items()) {
+        for (MenuItem* menuItem : toolBarItem->menuItems()) {
+            const ActionCode code = menuItem->action().code;
+            if (containsAction(codes, code)) {
+                menuItem->setState(uiActionsRegister()->actionState(code));
+            }
+        }
+    }
+
+    // The zoom sliders are kept apart from items() (they sit at the right
+    // end), so the base class never updates them: without this they kept
+    // the disabled state they were made with before a project opened.
+    for (ToolBarItem* item : m_rightItems) {
+        const ActionCode code = item->action().code;
+        if (containsAction(codes, code)) {
+            item->setState(uiActionsRegister()->actionState(code));
+        }
+    }
+
+    AbstractToolBarModel::onActionsStateChanges(codes);
+}
+
+void PlaybackToolBarModel::updateStates()
+{
+    updatePlayState();
+    updateStopState();
+    updateRecordState();
+    updateLoopState();
+    updatePerformStopState();
+    updateClipGainAutomationState();
+    updateSplitState();
+    updateGlobalSpectrogramViewState();
+}
+
+void PlaybackToolBarModel::updatePlayState()
+{
+    PlaybackToolBarControlItem* item = dynamic_cast<PlaybackToolBarControlItem*>(findItemPtr(PLAYBACK_TOGGLE_PLAY_PAUSE_QUERY.toString()));
+
+    if (item == nullptr) {
+        return;
+    }
+
+    bool isPlaying = playbackController()->isPlaying();
+    bool isPaused = playbackController()->isPaused();
+    bool isRecording = recordController()->isRecording();
+    bool isLeadIn = recordController()->isLeadInRecording();
+
+    // During recording it pauses the recorder
+    UiAction action = uiActionsRegister()->action(PLAYBACK_TOGGLE_PLAY_PAUSE_QUERY.toString());
+
+    // During lead-in, show as playing (green background) since audio is playing back
+    bool showAsPlaying = isPlaying || isLeadIn;
+
+    bool leadInPaused = isLeadIn && isPaused;
+    if ((showAsPlaying && !leadInPaused) || (isRecording && !isLeadIn)) {
+        action.iconCode = IconCode::Code::PAUSE_FILL;
+    }
+    item->setAction(action);
+    item->setSelected(showAsPlaying);
+
+    QColor iconColor = themeColor(PLAY_COLOR);
+    QColor backgroundColor = themeColor(BUTTON_COLOR);
+    if (showAsPlaying) {
+        iconColor = themeColor(FONT_PRIMARY_COLOR);
+        backgroundColor = themeColor(PLAY_COLOR);
+    } else if (isRecording) {
+        iconColor = themeColor(FONT_PRIMARY_COLOR);
+    }
+
+    item->setIconColor(iconColor);
+    item->setBackgroundColor(backgroundColor);
+}
+
+void PlaybackToolBarModel::updateStopState()
+{
+    PlaybackToolBarControlItem* item = dynamic_cast<PlaybackToolBarControlItem*>(findItemPtr(PLAYBACK_STOP_QUERY.toString()));
+
+    if (item == nullptr) {
+        return;
+    }
+
+    const UiAction action = uiActionsRegister()->action(PLAYBACK_STOP_QUERY.toString());
+    item->setAction(action);
+    const QColor iconColor = themeColor(FONT_PRIMARY_COLOR);
+    item->setIconColor(iconColor);
+}
+
+//! The Stop beside PERFORM is red whenever there is a performance to stop, so
+//! it reads as the partner of the red PERFORM rather than of ordinary playback.
+void PlaybackToolBarModel::updatePerformStopState()
+{
+    auto* item = dynamic_cast<PlaybackToolBarControlItem*>(findItemPtr(ActionCode("mixhouse-reset-performance")));
+
+    if (item == nullptr) {
+        return;
+    }
+
+    const bool performing = uiActionsRegister()->actionState("mixhouse-perform").checked;
+    const bool canStop = uiActionsRegister()->actionState("mixhouse-reset-performance").enabled;
+
+    // Paused mid-performance: filled in, like a held stop, so the square stays
+    // legible against the red.
+    const bool paused = canStop && !performing;
+    item->setSelected(paused);
+    item->setIconColor(paused ? themeColor(BACKGROUND_PRIMARY_COLOR)
+                       : canStop ? PERFORM_COLOR : themeColor(FONT_PRIMARY_COLOR));
+    item->setBackgroundColor(paused ? PERFORM_COLOR : themeColor(BUTTON_COLOR));
+}
+
+void PlaybackToolBarModel::updateRecordState()
+{
+    PlaybackToolBarControlItem* item = dynamic_cast<PlaybackToolBarControlItem*>(findItemPtr(RECORD_START_QUERY.toString()));
+
+    if (item == nullptr) {
+        return;
+    }
+
+    bool isRecording = recordController()->isRecording();
+    bool isLeadIn = recordController()->isLeadInRecording();
+
+    // During lead-in pre-roll, the button should not appear as actively recording
+    item->setSelected(isRecording && !isLeadIn);
+
+    QColor iconColor = themeColor(RECORD_COLOR);
+    QColor backgroundColor = themeColor(BUTTON_COLOR);
+    if (isRecording && !isLeadIn) {
+        iconColor = themeColor(BACKGROUND_PRIMARY_COLOR);
+        backgroundColor = themeColor(RECORD_COLOR);
+    }
+
+    item->setIconColor(iconColor);
+    item->setBackgroundColor(backgroundColor);
+}
+
+void PlaybackToolBarModel::updateLoopState()
+{
+    PlaybackToolBarControlItem* item = dynamic_cast<PlaybackToolBarControlItem*>(findItemPtr(LOOP_ACTION_CODE));
+
+    if (item == nullptr) {
+        return;
+    }
+
+    bool isLooping = playbackController()->isLoopRegionActive();
+    item->setSelected(isLooping);
+
+    item->setIconColor(themeColor(FONT_PRIMARY_COLOR));
+    item->setBackgroundColor(themeColor(isLooping ? ACCENT_COLOR : BUTTON_COLOR));
+}
+
+void PlaybackToolBarModel::updateToggleState(const ActionCode& actionCode, bool isOn)
+{
+    PlaybackToolBarControlItem* item = dynamic_cast<PlaybackToolBarControlItem*>(findItemPtr(actionCode));
+
+    if (item == nullptr) {
+        return;
+    }
+
+    item->setSelected(isOn);
+    item->setBackgroundColor(themeColor(isOn ? ACCENT_COLOR : BUTTON_COLOR));
+}
+
+void PlaybackToolBarModel::updateClipGainAutomationState()
+{
+    auto prj = context()->currentProject();
+
+    if (!prj) {
+        return;
+    }
+
+    updateToggleState(CLIP_GAIN_AUTOMATION_CODE, prj->viewState()->clipGainAutomationEnabled().val);
+}
+
+void PlaybackToolBarModel::updateSplitState()
+{
+    auto prj = context()->currentProject();
+
+    if (!prj) {
+        return;
+    }
+
+    updateToggleState(SPLIT_TOOL_ACTION_CODE, prj->viewState()->splitToolEnabled().val);
+}
+
+void PlaybackToolBarModel::updateGlobalSpectrogramViewState()
+{
+    auto prj = context()->currentProject();
+
+    if (!prj) {
+        return;
+    }
+
+    updateToggleState(TOGGLE_GLOBAL_SPECTROGRAM_VIEW_ACTION_CODE, prj->viewState()->globalSpectrogramToggleIsOn());
+}
+
+QColor PlaybackToolBarModel::themeColor(muse::ui::ThemeStyleKey key) const
+{
+    return uiConfiguration()->currentTheme().values.value(key).value<QColor>();
+}
+
+//! GlideMix: the toolbar's categories, each in its own capsule
+//! (0 = not one of them). The number is also their order.
+static int toolbarCategory(const std::string& code)
+{
+    static const std::map<std::string, int> categories {
+        { "action://record/level", 1 }, { "action://playback/level", 1 }, { "metronome", 1 },
+        { "mixhouse-sync", 2 }, { "mixhouse-keylock", 2 }, { "mixhouse-match-keys", 2 }, { "mixhouse-link", 2 },
+        { "snap", 3 },
+        { "mixhouse-tempo-lane", 4 }, { "mixhouse-energy-lane", 4 }, { "mixhouse-transition-labels", 4 },
+        { "mixhouse-perform", 5 }, { "mixhouse-reset-performance", 5 }, { "mixhouse-broadcast", 5 }, { "mixhouse-mix-now", 5 },
+        { "mixhouse-automation-arm", 6 }, { "mixhouse-reenable-automation", 6 },
+    };
+    const auto it = categories.find(code);
+    return it != categories.end() ? it->second : 0;
+}
+
+void PlaybackToolBarModel::updateActions()
+{
+    ToolBarItemList items;
+    QList<ToolBarItem*> rightItems;
+
+    muse::ui::ToolConfig playbackConfig = uiState()->toolConfig(TOOLBAR_NAME,
+                                                                ProjectSceneUiActions::defaultPlaybackToolBarConfig());
+
+    // GlideMix: Customize Toolbar keeps its Icon/Text choice in the saved
+    // list as a hidden marker item; a list with the marker was arranged by
+    // hand, so nothing below moves items for it.
+    // GlideMix (Chris, 2026-11-11): icon tiles only, no words (the name and
+    // what it does show on hover), and the GlideMix buttons in order of their
+    // category, each category its own capsule. Once per saved toolbar: the
+    // hidden marker "glidemix-toolbar-groups-1" is saved with it, so a later
+    // "Text only" from Customize Toolbar stays.
+    {
+        bool marked = false;
+        for (const muse::ui::ToolConfig::Item& citem : playbackConfig.items) {
+            marked = marked || citem.intent == "glidemix-toolbar-groups-1";
+        }
+        if (!marked) {
+            bool changed = false;
+            for (muse::ui::ToolConfig::Item& citem : playbackConfig.items) {
+                if (citem.intent == "glidemix-toolbar-style-2" || citem.intent == "glidemix-toolbar-style-0") {
+                    citem.intent = "glidemix-toolbar-style-1";
+                    changed = true;
+                }
+            }
+            // The categorised buttons keep their slots; inside those slots they
+            // are sorted by category (a stable sort keeps the order within one).
+            QList<int> places;
+            QList<muse::ui::ToolConfig::Item> grouped;
+            for (int i = 0; i < playbackConfig.items.size(); ++i) {
+                if (toolbarCategory(playbackConfig.items[i].intent) > 0) {
+                    places << i;
+                    grouped << playbackConfig.items[i];
+                }
+            }
+            std::stable_sort(grouped.begin(), grouped.end(), [](const auto& a, const auto& b) {
+                return toolbarCategory(a.intent) < toolbarCategory(b.intent);
+            });
+            for (int k = 0; k < places.size(); ++k) {
+                if (playbackConfig.items[places[k]].intent != grouped[k].intent) {
+                    playbackConfig.items[places[k]] = grouped[k];
+                    changed = true;
+                }
+            }
+            if (changed) {
+                // Saved after this pass (saving reloads the toolbar), with the marker.
+                playbackConfig.items.append(muse::ui::ToolConfig::Item("glidemix-toolbar-groups-1", false));
+                const muse::ui::ToolConfig save = playbackConfig;
+                QTimer::singleShot(0, this, [this, save]() { uiState()->setToolConfig(TOOLBAR_NAME, save); });
+            }
+        }
+    }
+    bool customised = false;
+    int displayStyle = 1;
+    for (const muse::ui::ToolConfig::Item& citem : playbackConfig.items) {
+        const QString intent = QString::fromStdString(citem.intent);
+        if (intent.startsWith(QStringLiteral("glidemix-toolbar-style-"))) {
+            customised = true;
+            displayStyle = std::clamp(intent.mid(23).toInt(), 0, 2);
+        }
+    }
+    if (displayStyle != m_displayStyle) {
+        m_displayStyle = displayStyle;
+        emit displayStyleChanged();
+    }
+
+    for (const muse::ui::ToolConfig::Item& citem : playbackConfig.items) {
+        if (!citem.show) {
+            continue;
+        }
+        if (citem.intent == "glidemix-flexible-space") {
+            if (!m_clocksOnly) {
+                UiAction flex;
+                flex.code = "glidemix-flexible-space";
+                items << new ToolBarItem(flex, static_cast<ToolBarItemType::Type>(FLEX_SPACE), this);
+            }
+            continue;
+        }
+
+        //! The level item always stays in the toolbar. It meters the Perform
+        //! (audience) output while the side-bar panel meters the headphone cue,
+        //! so both outputs are visible at once the way a DJ mixer shows master
+        //! and cue side by side. It is therefore no longer skipped when the
+        //! meter position is SideBar.
+
+        if (citem.isSeparator()) {
+            // No separators in the clocks row, and never two in a row once
+            // the clocks are taken out of this one.
+            if (!m_clocksOnly && !items.isEmpty() && items.last()->type() != ToolBarItemType::SEPARATOR) {
+                items << AbstractToolBarModel::makeSeparator();
+            }
+            continue;
+        }
+
+        const ItemType type = itemType(citem.intent);
+        // GlideMix: the one meter is the side panel's (Room or Cue);
+        // this item's show flag still opens and closes that panel.
+        if (type == PLAYBACK_LEVEL) {
+            continue;
+        }
+        const bool isClock = type == PLAYBACK_TIME || type == PLAYBACK_BPM || type == PLAYBACK_TIME_SIGNATURE;
+        // InTheMix (23/11): play, stop, to start, to end and loop sit with the
+        // clock in the centre of the header, not in the editing toolbar.
+        static const QStringList kTransport = {
+            QStringLiteral("action://playback/toggle-play-pause"), QStringLiteral("action://playback/stop"),
+            QStringLiteral("action://playback/rewind-start"), QStringLiteral("action://playback/rewind-end"),
+            QStringLiteral("toggle-loop-region"),
+        };
+        const bool withClock = isClock || kTransport.contains(QString::fromStdString(citem.intent));
+        if (withClock != m_clocksOnly) {
+            continue;
+        }
+
+        ToolBarItem* item = makeLocalItem(citem.intent);
+        if (!item) {
+            continue;
+        }
+
+        item->setIsTransparent(false);
+
+        if (type == SLIDER) {
+            rightItems << item;
+            continue;
+        }
+        items << item;
+    }
+
+    // GlideMix: Snap sits between KEYLOCK and PERFORM, whatever order a
+    // workspace saved -- it is used with SYNC/KEYLOCK while arranging.
+    int snapAt = -1, keylockAt = -1;
+    for (int i = 0; i < items.size(); ++i) {
+        const QString code = QString::fromStdString(items[i]->action().code);
+        if (code == QStringLiteral("snap")) {
+            snapAt = i;
+        } else if (toolbarCategory(items[i]->action().code) == 2) {
+            keylockAt = i;   // GlideMix: after the last of SYNC / KEYLOCK / LINK
+        }
+    }
+    if (!customised && snapAt >= 0 && keylockAt >= 0) {
+        ToolBarItem* snap = items.takeAt(snapAt);
+        if (snapAt < keylockAt) {
+            --keylockAt;
+        }
+        items.insert(keylockAt + 1, snap);
+        // No separator left doubled or dangling where Snap was.
+        for (int i = items.size() - 1; i > 0; --i) {
+            if (items[i]->type() == ToolBarItemType::SEPARATOR && items[i - 1]->type() == ToolBarItemType::SEPARATOR) {
+                items.removeAt(i);
+            }
+        }
+        while (!items.isEmpty() && items.last()->type() == ToolBarItemType::SEPARATOR) {
+            items.removeLast();
+        }
+    }
+
+    // GlideMix: the performance's Stop sits right after PERFORM, whatever
+    // order a workspace saved (it used to come after the broadcast button).
+    int performAt = -1, stopAt = -1;
+    for (int i = 0; i < items.size(); ++i) {
+        const QString code = QString::fromStdString(items[i]->action().code);
+        if (code == QStringLiteral("mixhouse-perform")) {
+            performAt = i;
+        } else if (code == QStringLiteral("mixhouse-reset-performance")) {
+            stopAt = i;
+        }
+    }
+    if (!customised && performAt >= 0 && stopAt >= 0 && stopAt != performAt + 1) {
+        ToolBarItem* stop = items.takeAt(stopAt);
+        if (stopAt < performAt) {
+            --performAt;
+        }
+        items.insert(performAt + 1, stop);
+    }
+
+    // GlideMix: a capsule per category -- a separator wherever two
+    // neighbouring buttons belong to different categories.
+    for (int i = items.size() - 1; i > 0; --i) {
+        if (items[i]->type() == ToolBarItemType::SEPARATOR || items[i - 1]->type() == ToolBarItemType::SEPARATOR) {
+            continue;
+        }
+        const int here = toolbarCategory(items[i]->action().code);
+        const int before = toolbarCategory(items[i - 1]->action().code);
+        if (here != before && (here > 0 || before > 0)) {
+            items.insert(i, AbstractToolBarModel::makeSeparator());
+        }
+    }
+
+    // GlideMix: an emptied group leaves no gap: no separator first, last or
+    // next to another one.
+    for (int i = items.size() - 1; i > 0; --i) {
+        if (items[i]->type() == ToolBarItemType::SEPARATOR && items[i - 1]->type() == ToolBarItemType::SEPARATOR) {
+            delete items.takeAt(i);
+        }
+    }
+    while (!items.isEmpty() && items.first()->type() == ToolBarItemType::SEPARATOR) {
+        delete items.takeFirst();
+    }
+    while (!items.isEmpty() && items.last()->type() == ToolBarItemType::SEPARATOR) {
+        delete items.takeLast();
+    }
+
+    setItems(items);
+
+    const QList<ToolBarItem*> old = m_rightItems;
+    m_rightItems = rightItems;
+    emit rightItemsChanged();
+    for (ToolBarItem* item : old) {
+        item->deleteLater();
+    }
+}
+
+QVariantList PlaybackToolBarModel::rightItems() const
+{
+    QVariantList list;
+    for (ToolBarItem* item : m_rightItems) {
+        list << QVariant::fromValue(item);
+    }
+    return list;
+}
+
+ToolBarItem* PlaybackToolBarModel::makeLocalItem(const ActionCode& actionCode)
+{
+    PlaybackToolBarModel::ItemType type = itemType(actionCode);
+
+    if (type == PlaybackToolBarModel::PROJECT_CONTROL) {
+        ToolBarItem* item = AbstractToolBarModel::makeItem(actionCode);
+        item->setType(static_cast<ToolBarItemType::Type>(type));
+        return item;
+    }
+
+    ToolBarItem* result = nullptr;
+    const UiAction& action = uiActionsRegister()->action(actionCode);
+
+    switch (type) {
+    case PlaybackToolBarModel::PLAYBACK_LEVEL:
+        result = new PlaybackToolBarLevelItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::PLAYBACK_TIME:
+        result = new PlaybackToolBarTimeItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::PLAYBACK_BPM:
+        result = new TempoBpmToolBarItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::PLAYBACK_TIME_SIGNATURE:
+        result = new PlaybackToolBarTimeSignatureItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::RECORD_LEVEL:
+        result = new record::PlaybackToolBarRecordLevelItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::PLAYBACK_CONTROL: {
+        PlaybackToolBarControlItem* item = new PlaybackToolBarControlItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        item->setIconColor(themeColor(FONT_PRIMARY_COLOR));
+        item->setBackgroundColor(themeColor(BUTTON_COLOR));
+        result = std::move(item);
+        break;
+    }
+    case PlaybackToolBarModel::SNAP:
+        result = new projectscene::SnapToolBarItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::METRONOME:
+        result = new projectscene::MetronomeToolBarItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::BROADCAST:
+        result = new projectscene::BroadcastToolBarItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    case PlaybackToolBarModel::TEXT_TOGGLE:
+        if (actionCode == "mixhouse-perform") {
+            result = new projectscene::PerformToolBarItem(action, static_cast<ToolBarItemType::Type>(type), this);
+            break;
+        }
+        result = new ToolBarItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        result->setShowTitle(true);
+        break;
+    case PlaybackToolBarModel::SLIDER:
+        result = new projectscene::MixtapeSliderToolBarItem(action, static_cast<ToolBarItemType::Type>(type), this);
+        break;
+    default:
+        break;
+    }
+
+    if (result) {
+        result->setState(uiActionsRegister()->actionState(actionCode));
+    }
+
+    return result;
+}
+
+bool PlaybackToolBarModel::clocksOnly() const
+{
+    return m_clocksOnly;
+}
+
+void PlaybackToolBarModel::setClocksOnly(bool clocksOnly)
+{
+    if (m_clocksOnly == clocksOnly) {
+        return;
+    }
+    m_clocksOnly = clocksOnly;
+    emit clocksOnlyChanged();
+    if (m_inited) {
+        reload();
+    }
+}
+
+bool PlaybackToolBarModel::isEnabled() const
+{
+    return context()->currentProject() != nullptr;
+}

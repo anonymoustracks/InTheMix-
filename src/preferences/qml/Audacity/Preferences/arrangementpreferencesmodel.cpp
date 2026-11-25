@@ -1,0 +1,134 @@
+/*
+ * GlideMix
+ */
+#include <QSettings>
+#include "arrangementpreferencesmodel.h"
+
+using namespace au::preferences;
+
+ArrangementPreferencesModel::ArrangementPreferencesModel(QObject* parent)
+    : QObject(parent), muse::Contextable(muse::iocCtxForQmlObject(this))
+{
+}
+
+int ArrangementPreferencesModel::waveformStyle() const
+{
+    return uiState() && uiState()->clipWaveformRgb() ? 1 : 0;
+}
+
+void ArrangementPreferencesModel::setWaveformStyle(int style)
+{
+    if (!uiState() || style == waveformStyle()) {
+        return;
+    }
+    uiState()->setClipWaveformRgb(style == 1);
+    emit changed();
+}
+
+bool ArrangementPreferencesModel::phraseRibbon() const
+{
+    return libraryConfiguration() ? libraryConfiguration()->phraseRibbonVisible() : true;
+}
+
+void ArrangementPreferencesModel::setPhraseRibbon(bool visible)
+{
+    if (!libraryConfiguration() || visible == phraseRibbon()) {
+        return;
+    }
+    libraryConfiguration()->setPhraseRibbonVisible(visible);
+    emit changed();
+}
+
+bool ArrangementPreferencesModel::wheelZooms() const
+{
+    return QSettings().value(QStringLiteral("GlideMix/wheelZooms"), false).toBool();
+}
+
+void ArrangementPreferencesModel::setWheelZooms(bool zooms)
+{
+    if (zooms == wheelZooms()) {
+        return;
+    }
+    QSettings().setValue(QStringLiteral("GlideMix/wheelZooms"), zooms);
+    emit changed();
+}
+
+bool ArrangementPreferencesModel::bandLineFill() const
+{
+    return !uiState() || uiState()->bandLineFill();
+}
+
+void ArrangementPreferencesModel::setBandLineFill(bool on)
+{
+    if (!uiState() || on == bandLineFill()) {
+        return;
+    }
+    uiState()->setBandLineFill(on);
+    emit changed();
+}
+
+int ArrangementPreferencesModel::laneBackground() const
+{
+    return uiState() ? uiState()->laneBackground() : 0;
+}
+
+void ArrangementPreferencesModel::setLaneBackground(int mode)
+{
+    if (!uiState() || mode == laneBackground()) {
+        return;
+    }
+    uiState()->setLaneBackground(mode);
+    emit changed();
+}
+
+bool ArrangementPreferencesModel::beatGridVisible() const
+{
+    return !uiState() || uiState()->gridLinesVisible();
+}
+
+void ArrangementPreferencesModel::setBeatGridVisible(bool visible)
+{
+    if (!uiState() || visible == beatGridVisible()) {
+        return;
+    }
+    uiState()->setGridLinesVisible(visible);
+    emit changed();
+}
+
+bool ArrangementPreferencesModel::stereoWaveform() const
+{
+    return uiState() && uiState()->clipWaveformStereo();
+}
+
+void ArrangementPreferencesModel::setStereoWaveform(bool stereo)
+{
+    if (!uiState() || stereo == stereoWaveform()) {
+        return;
+    }
+    uiState()->setClipWaveformStereo(stereo);
+    emit changed();
+}
+
+int ArrangementPreferencesModel::trackView() const
+{
+    return uiState() ? uiState()->allTracksView() : -1;
+}
+
+void ArrangementPreferencesModel::setTrackView(int view)
+{
+    static const char* const codes[] = {
+        "track-view-all-waveform", "track-view-all-single-wave", "track-view-all-half-wave",
+        "track-view-all-spectrogram", "track-view-all-multi",
+    };
+    if (view < 0 || view > 4 || view == trackView()) {
+        return;
+    }
+    if (uiState()) {
+        uiState()->setAllTracksView(view);   // kept with no project open too
+    }
+    // The View menu's own action changes the open project's tracks.
+    if (dispatcher()) {
+        dispatcher()->dispatch(codes[view]);
+    }
+    emit changed();
+}

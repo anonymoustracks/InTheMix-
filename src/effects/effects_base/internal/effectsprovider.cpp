@@ -1,0 +1,464 @@
+/*
+* Audacity: A Digital Audio Editor
+*/
+#include "effectsprovider.h"
+#include "effectsutils.h"
+
+#include "au3-basic-ui/BasicUI.h"
+#include "au3wrap/internal/progressdialog.h"
+
+#include "au3-effects/Effect.h"
+#include "au3-effects/EffectManager.h"
+#include "au3-realtime-effects/RealtimeEffectState.h"
+
+#include "au3-module-manager/ModuleManager.h"
+
+#include "framework/global/log.h"
+#include "framework/audioplugins/audiopluginserrors.h"
+#include "stringutils.h"
+
+#include <map>
+#include <set>
+
+#include <QFileInfo>
+#include <QStringList>
+
+using namespace muse;
+using namespace au::effects;
+
+namespace {
+// GlideMix: the first scan finds everything already installed; after
+// that, only what was added since, so say so and name them.
+bool askToValidatePlugins(muse::IInteractive& interactive, const muse::io::paths_t& newPlugins, bool firstScan)
+{
+    std::string title;
+    std::string text;
+    if (firstScan) {
+        title = muse::trc("appshell", "Validate audio plugins");
+        text = (newPlugins.size() == 1
+                ? muse::qtrc("appshell", "InTheMix found 1 audio plugin on this computer. It needs a quick check "
+                                         "before it can be used. Validate it now, or skip and do it later?")
+                : muse::qtrc("appshell", "InTheMix found %1 audio plugins on this computer. They need a quick check "
+                                         "before they can be used. Validate them now, or skip and do it later?")
+                .arg(newPlugins.size())).toStdString();
+    } else {
+        QStringList names;
+        for (const auto& path : newPlugins) {
+            const QString name = QFileInfo(path.toQString()).completeBaseName();
+            if (!name.isEmpty() && !names.contains(name)) {
+                names << name;
+            }
+        }
+        constexpr int kShown = 5;
+        QString list = names.mid(0, kShown).join(QStringLiteral(", "));
+        if (names.size() > kShown) {
+            list += muse::qtrc("appshell", " and %1 more").arg(names.size() - kShown);
+        }
+        const bool one = names.size() == 1;
+        title = one ? muse::trc("appshell", "New audio plugin found") : muse::trc("appshell", "New audio plugins found");
+        text = (one
+                ? muse::qtrc("appshell", "InTheMix found a new audio plugin: %1.\n\nIt needs a quick check before "
+                                         "it can be used. Validate it now, or skip and do it later?")
+                : muse::qtrc("appshell", "InTheMix found new audio plugins: %1.\n\nThey need a quick check before "
+                                         "they can be used. Validate them now, or skip and do it later?"))
+               .arg(list).toStdString();
+    }
+    auto ret = interactive.questionSync(title, text,
+                                        { muse::IInteractive::ButtonData(
+                                              muse::IInteractive::Button::Cancel,
+                                              muse::trc("appshell", "Skip this time"),
+                                              false),
+                                          muse::IInteractive::ButtonData(
+                                              muse::IInteractive::Button::Apply, muse::trc("appshell", "Validate"),
+                                              true) },
+                                        int(muse::IInteractive::Button::NoButton),
+                                        {},
+                                        muse::trc("appshell", "Audio plugin validation"));
+    return ret.standardButton() == muse::IInteractive::Button::Apply;
+}
+}
+
+bool EffectsProvider::validatePendingPlugins(const muse::modularity::ContextPtr&, muse::IInteractive& interactive,
+                                             muse::audioplugins::IRegisterAudioPluginsScenario& registerAudioPluginsScenario)
+{
+    if (m_pendingPluginPaths.empty()) {
+        return false;
+    }
+    if (!askToValidatePlugins(interactive, m_pendingPluginPaths, !thirdPartyPluginsKnown())) {
+        m_pendingPluginPaths.clear();   // this session; the next start finds them again
+        return false;
+    }
+    const muse::io::paths_t paths = std::move(m_pendingPluginPaths);
+    m_pendingPluginPaths.clear();
+    const muse::Ret ret = registerAudioPluginsScenario.registerNewPlugins(paths, true);
+    if (!ret) {
+        LOGE() << "Failed to register new plugins: " << ret.toString();
+    }
+    reloadEffects();
+    return true;
+}
+
+bool EffectsProvider::thirdPartyPluginsKnown() const
+{
+    for (const auto& plugin : knownPluginsRegister()->pluginInfoList()) {
+        const auto family = utils::effectFamilyFromCacheType(plugin.meta.type);
+        if (family != EffectFamily::Nyquist && family != EffectFamily::Builtin && family != EffectFamily::Extension) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void EffectsProvider::initOnce(const muse::modularity::ContextPtr& ctx, muse::IInteractive& interactive,
+                               muse::audioplugins::IRegisterAudioPluginsScenario& registerAudioPluginsScenario)
+{
+    // GlideMix: nothing is asked at launch. What is new waits for the first
+    // Add effect (validatePendingPlugins).
+    m_deferNewPlugins = true;
+    doScanPlugins(ctx, registerAudioPluginsScenario);
+    m_deferNewPlugins = false;
+
+    turnOffPluginsThatCrashedLastRun(interactive);
+
+    // Providers must be available in ModuleManager for on-demand plugin loading.
+    ModuleManager::Get().DiscoverProviders();
+
+    // Register for future changes
+    knownPluginsRegister()->pluginInfoListChanged().onNotify(this, [this]() {
+        reloadEffects();
+    });
+}
+
+void EffectsProvider::setPluginsThatCrashedLastRun(std::vector<std::string> ids)
+{
+    m_crashedLastRun = std::move(ids);
+}
+
+// GlideMix: a plug-in that crashed the app last time is marked broken (the
+// same state muse's load guard uses for a crash while loading), so it is not
+// loaded again -- not even by a project that uses it -- and we say which one.
+// Plugin manager > Rescan plugins with "Include plugins with errors" brings
+// it back.
+void EffectsProvider::turnOffPluginsThatCrashedLastRun(muse::IInteractive& interactive)
+{
+    if (m_crashedLastRun.empty()) {
+        return;
+    }
+    const std::vector<std::string> crashed = std::move(m_crashedLastRun);
+    m_crashedLastRun.clear();
+
+    muse::audioplugins::AudioPluginInfoList toMark;
+    muse::audioplugins::PluginResourceIdList toMarkIds;
+    QStringList names;
+    for (const auto& info : knownPluginsRegister()->pluginInfoList()) {
+        if (std::find(crashed.begin(), crashed.end(), info.meta.id) == crashed.end()) {
+            continue;
+        }
+        LOGW() << "Plugin was running when the app crashed last time, turning it off: " << info.meta.id;
+
+        const EffectMeta meta = utils::museToAuEffectMeta(info.path, info.meta, info.state);
+        const QString name = meta.title.empty()
+                             ? QString::fromStdString(utils::parseEffectName(meta.id))
+                             : utils::effectDisplayTitle(meta).toQString();
+        if (!name.isEmpty() && !names.contains(name)) {
+            names << name;
+        }
+
+        if (info.state != muse::audioplugins::AudioPluginState::Error) {
+            auto broken = info;
+            broken.state = muse::audioplugins::AudioPluginState::Error;
+            broken.errorCode = static_cast<int>(muse::audioplugins::Err::PluginCrashedOnLoad);
+            toMarkIds.push_back(broken.meta.id);
+            toMark.push_back(std::move(broken));
+        }
+    }
+
+    if (!toMark.empty()) {
+        muse::Ret ret = knownPluginsRegister()->unregisterPlugins(toMarkIds);
+        if (ret) {
+            ret = knownPluginsRegister()->registerPlugins(toMark);
+        }
+        if (!ret) {
+            LOGE() << "Failed to turn off crashed plugins: " << ret.toString();
+        }
+        reloadEffects();
+    }
+
+    if (names.isEmpty()) {
+        return;
+    }
+
+    const bool one = names.size() == 1;
+    const std::string title = one ? muse::trc("effects", "Plugin turned off") : muse::trc("effects", "Plugins turned off");
+    const std::string text = (one
+                              ? muse::qtrc("effects", "InTheMix closed unexpectedly last time while this plugin was running: %1.\n\n"
+                                                      "It has been turned off so it can't close InTheMix again. Projects that "
+                                                      "use it open without it.\n\nTo try it again: Effect > Plugin manager, "
+                                                      "tick \"Include plugins with errors\", then Rescan plugins.")
+                              : muse::qtrc("effects", "InTheMix closed unexpectedly last time while these plugins were running: %1.\n\n"
+                                                      "They have been turned off so they can't close InTheMix again. Projects that "
+                                                      "use them open without them.\n\nTo try them again: Effect > Plugin manager, "
+                                                      "tick \"Include plugins with errors\", then Rescan plugins."))
+                             .arg(names.join(QStringLiteral(", "))).toStdString();
+    interactive.warningSync(title, text);
+}
+
+void EffectsProvider::forgetPlugins(const EffectFilter& forget)
+{
+    doSave([&forget](const EffectMeta& meta) {
+        return forget == nullptr || forget(meta);
+    });
+}
+
+void EffectsProvider::rescanPlugins(const muse::modularity::ContextPtr& ctx, muse::IInteractive& interactive,
+                                    muse::audioplugins::IRegisterAudioPluginsScenario& registerAudioPluginsScenario)
+{
+    if (doScanPlugins(ctx, registerAudioPluginsScenario) == NewPluginsRegistered::No) {
+        interactive.infoSync(muse::trc("audio", "Audio plugins scan completed"), muse::trc("audio", "All audio plugins are up to date."));
+    }
+}
+
+EffectsProvider::NewPluginsRegistered EffectsProvider::doScanPlugins(
+    const muse::modularity::ContextPtr& ctx,
+    muse::audioplugins::IRegisterAudioPluginsScenario& registerAudioPluginsScenario,
+    const std::function<bool(const muse::io::paths_t& newPlugins, bool firstScan)>& doScanThirdPartyPlugins)
+{
+    muse::audioplugins::PluginScanResult scanResult;
+    {
+        au3::ProgressDialog progressDialog(ctx, muse::trc("audio", "Validating audio plugins"));
+        // Scanners publish through `muse::Progress` directly (not via
+        // Poll), so the QML dialog wouldn't mount on its own. Open it
+        // explicitly before exposing the channel.
+        progressDialog.start();
+        scanResult = registerAudioPluginsScenario.scanPlugins(&progressDialog.museProgress());
+    }
+
+    muse::io::paths_t& thirdPartyPluginPaths = scanResult.newPluginPaths;
+    const auto metaReaders = metaReaderRegister()->readers();
+
+    std::map<muse::io::path_t, muse::audioplugins::IAudioPluginMetaReaderPtr> pathToMetaReader;
+    {
+        auto it = thirdPartyPluginPaths.begin();
+        while (it != thirdPartyPluginPaths.end()) {
+            const auto& path = *it;
+            auto found = false;
+            for (const auto& reader : metaReaders) {
+                if (reader->canReadMeta(path)) {
+                    pathToMetaReader[path] = reader;
+                    found = true;
+                    break;
+                }
+            }
+            IF_ASSERT_FAILED(found) {
+                it = thirdPartyPluginPaths.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    const auto mid = std::stable_partition(
+        thirdPartyPluginPaths.begin(), thirdPartyPluginPaths.end(),
+        [&](const auto& path) {
+        const auto family = utils::effectFamilyFromCacheType(pathToMetaReader.at(path)->metaType());
+        return !(family == EffectFamily::Nyquist || family == EffectFamily::Builtin || family == EffectFamily::Extension);
+    });
+
+    muse::io::paths_t trustedPluginPaths(mid, thirdPartyPluginPaths.end());
+    thirdPartyPluginPaths.erase(mid, thirdPartyPluginPaths.end());
+
+    knownPluginsRegister()->setPluginsState(scanResult.missingPluginPaths,
+                                            muse::audioplugins::AudioPluginState::Missing);
+
+    for (const io::path_t& path : trustedPluginPaths) {
+        registerAudioPluginsScenario.registerPlugin(path);
+    }
+
+    m_pendingPluginPaths.clear();
+    if (!thirdPartyPluginPaths.empty() && m_deferNewPlugins) {
+        m_pendingPluginPaths = thirdPartyPluginPaths;
+        thirdPartyPluginPaths.clear();
+    } else if (!thirdPartyPluginPaths.empty()) {
+        const bool validate = (doScanThirdPartyPlugins == nullptr
+                               || doScanThirdPartyPlugins(thirdPartyPluginPaths, !thirdPartyPluginsKnown()));
+        const muse::Ret ret = registerAudioPluginsScenario.registerNewPlugins(thirdPartyPluginPaths, validate);
+        if (!ret) {
+            LOGE() << "Failed to register new plugins: " << ret.toString();
+        }
+    }
+
+    std::set<muse::io::path_t> obsoleteExtensionPaths;
+    for (const auto& plugin : knownPluginsRegister()->pluginInfoList()) {
+        if (plugin.state == muse::audioplugins::AudioPluginState::Missing
+            && utils::effectFamilyFromCacheType(plugin.meta.type) == EffectFamily::Extension) {
+            obsoleteExtensionPaths.insert(plugin.path);
+        }
+    }
+    for (const auto& path : obsoleteExtensionPaths) {
+        const muse::Ret result = knownPluginsRegister()->removePluginsAtPath(path);
+        if (!result) {
+            LOGE() << "Failed to remove obsolete extension effects at " << path << ": " << result.toString();
+        }
+    }
+
+    reloadEffects();
+
+    return !trustedPluginPaths.empty() || !thirdPartyPluginPaths.empty() || !obsoleteExtensionPaths.empty()
+           ? NewPluginsRegistered::Yes : NewPluginsRegistered::No;
+}
+
+void EffectsProvider::deinit()
+{
+}
+
+void EffectsProvider::reloadEffects()
+{
+    m_effects.clear();
+
+    const auto knownPlugins = knownPluginsRegister()->pluginInfoList();
+    std::transform(knownPlugins.begin(), knownPlugins.end(), std::back_inserter(m_effects),
+                   [](const muse::audioplugins::AudioPluginInfo& info) {
+        return utils::museToAuEffectMeta(info.path, info.meta, info.state);
+    });
+
+    m_effectsChanged.notify();
+}
+
+EffectMetaList EffectsProvider::effectMetaList() const
+{
+    return m_effects;
+}
+
+muse::async::Notification EffectsProvider::effectMetaListChanged() const
+{
+    return m_effectsChanged;
+}
+
+EffectMeta EffectsProvider::meta(const EffectId& effectId) const
+{
+    for (const EffectMeta& meta : m_effects) {
+        if (meta.id == effectId) {
+            return meta;
+        }
+    }
+
+    // Here we don't log an error but an info, because metas may be queried for non-existent effects.
+    LOGI() << "not found meta: " << effectId;
+    return EffectMeta();
+}
+
+IEffectLoaderPtr EffectsProvider::loader(const EffectId& effectId) const
+{
+    const auto it = std::find_if(m_effects.begin(), m_effects.end(), [&](const EffectMeta& meta) {
+        return meta.id == effectId;
+    });
+    if (it == m_effects.end()) {
+        return nullptr;
+    }
+    return effectLoadersRegister()->loader(it->family);
+}
+
+bool EffectsProvider::hasEffectFamily(EffectFamily family) const
+{
+    return effectLoadersRegister()->loader(family) != nullptr;
+}
+
+bool EffectsProvider::loadEffect(const EffectId& effectId) const
+{
+    const IEffectLoaderPtr loader = this->loader(effectId);
+    if (!loader) {
+        return false;
+    }
+    return loader->ensurePluginIsLoaded(effectId);
+}
+
+std::string EffectsProvider::effectPath(const std::string& effectId) const
+{
+    // Parse rather than querying meta in case the effect is missing
+    return utils::parseEffectPath(muse::String::fromStdString(effectId));
+}
+
+std::string EffectsProvider::effectName(const std::string& effectId) const
+{
+    if (const auto meta = this->meta(EffectId::fromStdString(effectId)); meta.isValid()) {
+        return utils::effectDisplayTitle(meta).toStdString();
+    }
+    return utils::parseEffectName(muse::String::fromStdString(effectId));
+}
+
+std::string EffectsProvider::effectName(const effects::RealtimeEffectState& state) const
+{
+    return effectName(state.GetID().ToStdString());
+}
+
+bool EffectsProvider::paramsAreInputAgnostic(const EffectId& effectId) const
+{
+    for (const EffectMeta& meta : m_effects) {
+        if (meta.id == effectId) {
+            return meta.paramsAreInputAgnostic;
+        }
+    }
+
+    LOGE() << "not found meta: " << effectId;
+    return false;
+}
+
+Effect* EffectsProvider::effect(const EffectId& effectId) const
+{
+    if (!loadEffect(effectId)) {
+        return nullptr;
+    }
+
+    const IEffectLoaderPtr loader = this->loader(effectId);
+    if (!loader) {
+        return nullptr;
+    }
+
+    return loader->effect(effectId);
+}
+
+void EffectsProvider::setEffectActivated(const EffectId& effectId, bool activated)
+{
+    const auto it = std::find_if(m_effects.begin(), m_effects.end(), [&](const EffectMeta& meta) {
+        return meta.id == effectId;
+    });
+    if (it == m_effects.end()) {
+        LOGE() << "effect not found: " << effectId;
+        return;
+    }
+    it->isActivated = activated;
+    m_effectsChanged.notify();
+}
+
+void EffectsProvider::save()
+{
+    doSave();
+}
+
+void EffectsProvider::doSave(EffectFilter removeFromConfig)
+{
+    muse::audioplugins::AudioPluginInfoList newPlugins;
+
+    for (const auto& meta : m_effects) {
+        if (removeFromConfig != nullptr && removeFromConfig(meta)) {
+            continue;
+        }
+
+        muse::audioplugins::AudioPluginInfo info;
+        info.meta = utils::auToMuseEffectMeta(meta);
+        info.path = meta.path;
+        info.state = meta.state;
+
+        newPlugins.push_back(std::move(info));
+    }
+
+    // registerPlugins() merges into the register; remove the cache and reload
+    // so exactly newPlugins is persisted
+    const auto filePath = audioPluginsConfiguration()->knownAudioPluginsFilePath();
+    if (fileSystem()->exists(filePath)) {
+        fileSystem()->remove(filePath);
+    }
+    knownPluginsRegister()->load();
+
+    knownPluginsRegister()->registerPlugins(newPlugins);
+}

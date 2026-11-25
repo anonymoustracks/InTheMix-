@@ -1,0 +1,72 @@
+/*
+* Audacity: A Digital Audio Editor
+*/
+#ifndef AU_APPSHELL_PROJECTPAGEMODEL_H
+#define AU_APPSHELL_PROJECTPAGEMODEL_H
+
+#include "framework/global/modularity/ioc.h"
+#include "framework/global/async/asyncable.h"
+#include "framework/actions/actionable.h"
+#include "framework/actions/iactionsdispatcher.h"
+#include "framework/dockwindow/idockwindowprovider.h"
+#include "framework/ui/iuiconfiguration.h"
+#include "framework/ui/iuistate.h"
+
+#include "context/iglobalcontext.h"
+#include "playback/iplaybackuistate.h"
+
+#include <QtQml/qqmlregistration.h>
+
+namespace au::appshell {
+class ProjectPageModel : public QObject, public muse::async::Asyncable, public muse::actions::Actionable, public muse::Contextable
+{
+    Q_OBJECT
+    QML_ELEMENT
+
+    muse::GlobalInject<muse::ui::IUiConfiguration> uiConfiguration;
+
+    muse::ContextInject<muse::actions::IActionsDispatcher> dispatcher { this };
+    muse::ContextInject<au::context::IGlobalContext> globalContext { this };
+    muse::ContextInject<muse::dock::IDockWindowProvider> dockWindowProvider { this };
+    muse::ContextInject<muse::ui::IUiState> uiState { this };
+    muse::ContextInject<playback::IPlaybackUiState> playbackUiState { this };
+
+public:
+    explicit ProjectPageModel(QObject* parent = nullptr);
+
+    Q_INVOKABLE void init();
+
+    Q_INVOKABLE QString projectToolBarName() const;
+    Q_INVOKABLE QString playbackToolBarName() const;
+    Q_INVOKABLE QString undoRedoToolBarName() const;
+    Q_INVOKABLE QString workspacesToolBarName() const;
+
+    Q_INVOKABLE QString tracksPanelName() const;
+    Q_INVOKABLE QString historyPanelName() const;
+    Q_INVOKABLE QString playbackMeterPanelName() const;
+
+    Q_INVOKABLE QString statusBarName() const;
+
+    //! GlideMix: the bottom tabs (Music library, Project) that are closed,
+    //! as menu items, and opening one again (the tab bar's + button).
+    Q_INVOKABLE QVariantList closedBottomTabs() const;
+    Q_INVOKABLE void openDock(const QString& name);
+
+signals:
+    //! GlideMix (Chris): a new or opened project always shows the Music
+    //! library tab, not Project. ProjectPage raises the library tab on this.
+    void libraryTabWanted();
+
+private:
+    void wantLibraryTab();
+
+    void toggleDock(const QString& name);
+
+    void updatePlaybackMeterVisibility();
+
+    bool m_inited = false;
+    bool m_projectTabOpened = false;
+};
+}
+
+#endif // AU_APPSHELL_PROJECTPAGEMODEL_H

@@ -1,0 +1,212 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+import Muse.Ui
+import Muse.UiComponents
+
+import Audacity.UiComponents
+
+// GlideMix: the DJ fader look (mock A).
+DjSlider {
+    id: root
+
+    Layout.fillWidth: true
+
+    property double snapPoint: 0.0
+    property double snapRange: 2.0
+    property bool shiftPressed: false
+
+    signal newVolumeRequested(real volume, bool completed)
+
+    from: -60.0
+    to: 12.0
+
+    onValueChanged: {
+        newVolumeRequested(value, false)
+    }
+
+    QtObject {
+        id: prv
+
+        property bool dragActive: false
+        // GlideMix: DjSlider's cap; root.handle can still be StyledSlider's replaced one
+        property real handleWidth: root.capWidth
+        property real innerMargin: handleWidth / 2
+        property real startPos: 0.0
+        property real startFineValue: 0.0
+        property real pressValue: 0.0   // GlideMix: a click that changes nothing makes no history entry
+    }
+
+    Connections {
+        target: Qt.application
+
+        function onStateChanged() {
+            if (Qt.application.state !== Qt.ApplicationActive) {
+                prv.dragActive = false
+                tooltip.hide(true)
+            }
+        }
+    }
+
+    // GlideMix: the tooltip sits over the fader cap through this item. It was
+    // parented to root.handle, which still pointed at StyledSlider's handle that
+    // DjSlider replaces: that one is outside the window, and opening the tooltip
+    // on it crashed 1.1.29 on the Mac at the first hover.
+    Item {
+        id: tooltipAnchor
+
+        x: root.leftPadding + root.visualPosition * (root.availableWidth - width)
+        y: root.topPadding + (root.availableHeight - height) / 2
+        width: root.capWidth
+        height: root.capHeight
+    }
+
+    ValueTooltip {
+        id: tooltip
+
+        parent: tooltipAnchor
+
+        unitText: "dB"
+        sizingText: "-60.0dB"
+        value: root.value
+    }
+
+    // We have to reimplement dragging to allow the tooltip
+    // to stay on when the mouse is moved outside of the component
+    MouseArea {
+        id: mouseArea
+
+        anchors.fill: parent
+
+        hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+
+        onPressed: function (mouse) {
+            // GlideMix (Marc, 2026-11-19): right-click > type the volume in dB.
+            if (mouse.button === Qt.RightButton) {
+                valuePopup.openAt()
+                return
+            }
+            prv.pressValue = root.value
+            prv.dragActive = true
+            root.value = sliderValue()
+            tooltip.show(true)
+            prv.startPos = mouseX
+            prv.startFineValue = root.value
+        }
+
+        onDoubleClicked: {
+            root.newVolumeRequested(root.value = 0, true)
+        }
+
+        onReleased: function (mouse) {
+            if (mouse.button === Qt.RightButton) {
+                return
+            }
+            prv.dragActive = false
+            if (!containsMouse) {
+                tooltip.hide(true)
+            }
+            root.newVolumeRequested(root.value, root.value !== prv.pressValue)
+        }
+
+        onEntered: {
+            tooltip.show()
+        }
+
+        onExited: {
+            if (!prv.dragActive) {
+                tooltip.hide(true)
+            }
+        }
+
+        onPositionChanged: function (e) {
+            if (!prv.dragActive) {
+                return
+            }
+
+            if ((e.modifiers & (Qt.ShiftModifier))) {
+                if (!root.shiftPressed) {
+                    root.shiftPressed = true
+                    prv.startPos = mouseX
+                    prv.startFineValue = root.value
+                }
+
+                root.value = fineSliderValue()
+            } else {
+                if (root.shiftPressed) {
+                    root.shiftPressed = false
+                    prv.startPos = mouseX
+                    prv.startFineValue = root.value
+                }
+                root.value = sliderValue()
+            }
+        }
+
+        function sliderValue() {
+            let relativePos = (mouseX - prv.innerMargin) / (width - prv.handleWidth)
+            relativePos = Math.max(0, Math.min(1, relativePos))
+            return relativePos * (root.to - root.from) + root.from
+        }
+
+        function fineSliderValue() {
+            let step = 2 * (mouseX - prv.startPos) / (root.to - root.from)
+            return prv.startFineValue + step
+        }
+    }
+
+    // GlideMix (Marc, 2026-11-19: "set a certain value"): right-click the fader, type the
+    // level, Enter. -inf or anything at or below -60 is silent.
+    Popup {
+        id: valuePopup
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        padding: 12
+
+        function openAt() {
+            valueField.currentText = root.value <= root.from ? "-inf" : root.value.toFixed(1)
+            open()
+            valueField.ensureActiveFocus()
+            valueField.selectAll()
+        }
+        function apply() {
+            const text = String(valueField.inputField.text).trim().replace(",", ".").replace(/dB$/i, "").trim()
+            let db
+            if (/^-?inf/i.test(text)) {
+                db = root.from
+            } else {
+                db = parseFloat(text)
+                if (isNaN(db)) {
+                    return
+                }
+            }
+            db = Math.max(root.from, Math.min(root.to, db))
+            root.newVolumeRequested(root.value = db, true)
+            close()
+        }
+
+        background: Rectangle {
+            color: ui.theme.backgroundPrimaryColor
+            border.color: ui.theme.strokeColor
+            radius: 4
+        }
+        contentItem: RowLayout {
+            spacing: 8
+            StyledTextLabel { text: qsTrc("projectscene", "Volume") }
+            TextInputField {
+                id: valueField
+                Layout.preferredWidth: 90
+                onAccepted: valuePopup.apply()
+                onEscaped: valuePopup.close()
+            }
+            StyledTextLabel { text: "dB" }
+            FlatButton {
+                text: qsTrc("global", "OK")
+                accentButton: true
+                onClicked: valuePopup.apply()
+            }
+        }
+    }
+}
