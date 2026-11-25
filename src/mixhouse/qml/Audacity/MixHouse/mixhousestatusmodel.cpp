@@ -3,8 +3,10 @@
  */
 #include "mixhousestatusmodel.h"
 
+#include <QDesktopServices>
 #include <QFileInfo>
 #include <QLocale>
+#include <QUrl>
 
 #include "translation.h"
 
@@ -280,10 +282,8 @@ void MixHouseStatusModel::refresh()
 
 void MixHouseStatusModel::checkForUpdate()
 {
-    // InTheMix: no GlideMix update banner (it would install the original GlideMix).
-    if (true) {
-        return;
-    }
+    // InTheMix: the check asks anonymoustracks.com (configs/update.cfg "latest",
+    // GitHub-release JSON); a newer version shows the NEW UPDATE AVAILABLE pill.
     m_updateTimer.start(kUpdateCheckEveryMs);
     if (!updateService() || !updateConfiguration() || !updateConfiguration()->needCheckForUpdate()) {
         return;
@@ -299,15 +299,11 @@ void MixHouseStatusModel::checkForUpdate()
 
 void MixHouseStatusModel::openUpdate()
 {
-    if (!updateScenario()) {
-        return;
-    }
-#ifdef Q_OS_MAC
-    // Sparkle shows the new version and installs it.
-    updateScenario()->checkForUpdate(true);
-#else
-    updateScenario()->showUpdate();
-#endif
+    // InTheMix: the installer is sold on anonymoustracks.com -- the pill opens
+    // the download page there (update.cfg "app_website_url"), where the
+    // customer gets the new version from their account.
+    const std::string url = updateConfiguration() ? updateConfiguration()->appWebSiteUrl() : std::string();
+    QDesktopServices::openUrl(QUrl(QString::fromStdString(url.empty() ? "https://anonymoustracks.com" : url)));
 }
 
 void MixHouseStatusModel::stop()

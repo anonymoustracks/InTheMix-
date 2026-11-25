@@ -147,7 +147,7 @@ Item {
                 anchors.centerIn: parent
                 color: "#ffffff"
                 font.bold: true
-                text: qsTrc("mixhouse", "InTheMix %1 is out · Click to update").arg(status.updateVersion)
+                text: qsTrc("mixhouse", "NEW UPDATE AVAILABLE  v%1").arg(status.updateVersion)
             }
 
             MouseArea {
