@@ -75,11 +75,17 @@ add_compile_definitions(AU4_APP_TITLE_VERSION="${MUSE_APP_TITLE_VERSION}")
 ###########################################
 
 # Configure muse_framework app bundle name for macOS
-set(MUSE_APP_BUNDLE_NAME "GlideMix.app")
+# InTheMix: InTheMix.app on the Mac (the Windows build keeps the old value,
+# unused there, so nothing is rebuilt for it).
+if (OS_IS_MAC)
+    set(MUSE_APP_BUNDLE_NAME "InTheMix.app")
+else()
+    set(MUSE_APP_BUNDLE_NAME "GlideMix.app")
+endif()
 
 if (OS_IS_MAC)
     SET(AU4_INSTALL_NAME  "Contents/Resources/")
-    SET(AU4_SHARE_NAME    "GlideMix.app/")
+    SET(AU4_SHARE_NAME    "InTheMix.app/")
     SET(AU4_FRAMEWORKS_NAME "Frameworks/")
 elseif (OS_IS_WIN)
     SET(AU4_INSTALL_NAME  "")

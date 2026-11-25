@@ -67,8 +67,8 @@ elseif(OS_IS_MAC)
     # collides with an installed Audacity (same id made LaunchServices open the
     # wrong app). The bundle folder is MUSE_APP_BUNDLE_NAME / AU4_SHARE_NAME in
     # SetupConfigure.cmake; settings are keyed by the names set in main.cpp.
-    set(MACOSX_BUNDLE_GUI_IDENTIFIER ${MUSE_APP_GUI_IDENTIFIER})
-    set(MACOSX_BUNDLE_BUNDLE_NAME "GlideMix Studio")
+    set(MACOSX_BUNDLE_GUI_IDENTIFIER "com.anonymoustracks.inthemix")   # InTheMix: never GlideMix's id
+    set(MACOSX_BUNDLE_BUNDLE_NAME "InTheMix")
     set(MACOSX_BUNDLE_LONG_VERSION_STRING ${MUSE_APP_VERSION})
     set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${MUSE_APP_VERSION})
     set(MACOSX_BUNDLE_BUNDLE_VERSION ${CMAKE_BUILD_NUMBER})
@@ -293,7 +293,7 @@ if (OS_IS_MAC)
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${MACOSX_BUNDLE_GUI_IDENTIFIER}
         # GlideMix.app/Contents/MacOS/GlideMix (must match MUSE_APP_BUNDLE_NAME /
         # AU4_SHARE_NAME in SetupConfigure.cmake).
-        OUTPUT_NAME GlideMix
+        OUTPUT_NAME InTheMix
     )
     target_link_libraries(audacity PRIVATE "-framework Cocoa")
     # GlideMix: Sparkle (macOS updates) goes inside the app, next to Qt.

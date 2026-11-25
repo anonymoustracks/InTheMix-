@@ -9,12 +9,12 @@
 	<!-- UTI declarations for OS X >= 10.4	-->
 	<key>UTExportedTypeDeclarations</key>
 	<array>
-		<!-- GlideMix projects -->
+		<!-- InTheMix projects -->
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>com.glidemix.aup4</string>
+			<string>com.anonymoustracks.inthemix.aup4</string>
 			<key>UTTypeDescription</key>
-			<string>GlideMix Project</string>
+			<string>InTheMix Project</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
@@ -37,7 +37,7 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>GlideMix Project</string>
+			<string>InTheMix Project</string>
 			<key>CFBundleTypeExtensions</key>
 			<array>
 				<string>aup4</string>
@@ -250,10 +250,10 @@
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
             <key>CFBundleURLName</key>
-            <string>com.glidemix.url</string>
+            <string>com.anonymoustracks.inthemix.url</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>glidemix</string>
+                <string>inthemix</string>
             </array>
         </dict>
     </array>
@@ -290,7 +290,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>${MACOSX_BUNDLE_COPYRIGHT}</string>        
         <key>NSMicrophoneUsageDescription</key>
-        <string>GlideMix requires access to the microphone only if you intend to record from it.</string>
+        <string>InTheMix requires access to the microphone only if you intend to record from it.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>ATSApplicationFontsPath</key>
