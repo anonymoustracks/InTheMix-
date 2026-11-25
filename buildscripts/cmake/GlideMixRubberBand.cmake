@@ -42,6 +42,10 @@ if (WIN32)
         # Third-party code: no warnings of ours; /O2 in Release comes from CMake.
         target_compile_options(glidemix_rubberband PRIVATE /w)
     endif()
+elseif (APPLE)
+    # InTheMix: Intel / universal Mac builds (arm64 alone uses the vendored libraries).
+    target_compile_definitions(glidemix_rubberband PRIVATE HAVE_POSIX_MEMALIGN)
+    target_compile_options(glidemix_rubberband PRIVATE -w)
 elseif (NOT APPLE)
     target_compile_definitions(glidemix_rubberband PRIVATE HAVE_POSIX_MEMALIGN)
     target_compile_options(glidemix_rubberband PRIVATE -w)

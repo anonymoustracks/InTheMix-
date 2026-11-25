@@ -50,7 +50,10 @@ audacity_library( ${TARGET} "${SOURCES}" "${LIBRARIES}"
 # Rubber Band 4, vendored with the DJ Effects for macOS arm64; Windows and Linux
 # build it from source (buildscripts/cmake/GlideMixRubberBand.cmake). Intel Mac
 # builds the engine without time stretching.
-if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+# InTheMix: the vendored libraries are arm64 only -- an Intel or universal
+# (arm64;x86_64) Mac build compiles Rubber Band from source like Windows.
+if(APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"
+              OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")))
    set(MIXTAPE_ENGINE_RUBBERBAND_ROOT
       "${CMAKE_CURRENT_LIST_DIR}/../../../src/effects/builtin_collection/mixxx/thirdparty/rubberband-macos-arm64")
 endif()
@@ -64,8 +67,9 @@ if(MIXTAPE_ENGINE_RUBBERBAND_ROOT AND EXISTS "${MIXTAPE_ENGINE_RUBBERBAND_ROOT}/
    if(APPLE)
       target_link_libraries(${TARGET} PUBLIC "-framework Accelerate")
    endif()
-elseif(NOT APPLE)
-   # Windows / Linux: Rubber Band built from source (built-in FFT and resampler).
+elseif(TRUE)
+   # Windows / Linux / Intel and universal Mac: Rubber Band built from source
+   # (built-in FFT and resampler).
    include("${CMAKE_CURRENT_LIST_DIR}/../../../buildscripts/cmake/GlideMixRubberBand.cmake")
    target_compile_definitions(${TARGET} PRIVATE MIXTAPE_ENGINE_HAS_RUBBERBAND)
    target_link_libraries(${TARGET} PUBLIC glidemix_rubberband)

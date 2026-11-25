@@ -251,7 +251,10 @@ else()
     set(MIXXX_DSP_DEFINITIONS "MIXXX;T_LINUX")
 endif()
 set(MIXXX_DSP_INCLUDES "${MIXXX_DSP_DIR};${MIXXX_DSP_DIR}/lib/reverb;${MIXXX_DSP_DIR}/lib/fidlib")
-if (APPLE AND EXISTS "${MIXTAPE_RUBBERBAND_ROOT}/lib/librubberband.a")
+# InTheMix: the vendored libraries are arm64 only (see au3-mixtape-engine).
+if (APPLE AND EXISTS "${MIXTAPE_RUBBERBAND_ROOT}/lib/librubberband.a"
+    AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"
+         OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")))
     list(APPEND MIXXX_DSP_SRC ${MIXXX_DSP_DIR}/effects/backends/builtin/pitchshifteffect.cpp)
     list(APPEND MODULE_SRC ${MIXXX_DSP_DIR}/effects/backends/builtin/pitchshifteffect.cpp)
     list(APPEND MIXXX_DSP_DEFINITIONS MIXTAPE_HAS_RUBBERBAND)
@@ -262,8 +265,8 @@ if (APPLE AND EXISTS "${MIXTAPE_RUBBERBAND_ROOT}/lib/librubberband.a")
         "${MIXTAPE_RUBBERBAND_ROOT}/lib/libfftw3.a"
         "-framework Accelerate")
     message(STATUS "GlideMix: DJ Effects Pitch Shift uses Rubber Band from ${MIXTAPE_RUBBERBAND_ROOT}")
-elseif (NOT APPLE)
-    # Windows / Linux: Rubber Band built from source (built-in FFT and resampler).
+else()
+    # Windows / Linux / Intel and universal Mac: Rubber Band built from source.
     include(${CMAKE_CURRENT_LIST_DIR}/../../../buildscripts/cmake/GlideMixRubberBand.cmake)
     list(APPEND MIXXX_DSP_SRC ${MIXXX_DSP_DIR}/effects/backends/builtin/pitchshifteffect.cpp)
     list(APPEND MODULE_SRC ${MIXXX_DSP_DIR}/effects/backends/builtin/pitchshifteffect.cpp)
