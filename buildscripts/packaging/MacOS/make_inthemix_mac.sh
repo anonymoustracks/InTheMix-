@@ -16,6 +16,7 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 BUILD="$1"
 STAGE="$2"
 OUT="$3"
+FLAVOR="${4:-arm64}"   # arm64 | universal
 v() { grep -E "set\(MUSE_APP_VERSION_$1 " "$ROOT/version.cmake" | grep -oE '"[0-9]+"' | tr -d '"'; }
 VERSION="$(v MAJOR).$(v MINOR).$(v PATCH)"
 LABEL="$(v MAJOR).$(v MINOR)"
@@ -119,7 +120,7 @@ folders (where your songs and mixes are): allow the folders your music is in.
 InTheMix is open source (GPL v3): https://github.com/anonymoustracks/InTheMix-
 Website and support: https://anonymoustracks.com
 TXT
-DMG="$OUT/InTheMix-Beta-v$LABEL-mac-arm64.dmg"
+DMG="$OUT/InTheMix-Beta-v$LABEL-mac-$FLAVOR.dmg"
 rm -f "$DMG"
 hdiutil create -volname "InTheMix Beta v$LABEL" -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$DMG_DIR"

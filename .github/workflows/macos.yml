@@ -1,6 +1,7 @@
-# InTheMix by Anonymous Tracks -- the Mac app (Apple Silicon), built by GitHub.
+# InTheMix by Anonymous Tracks -- the Mac app, built by GitHub.
+# Two builds: Apple Silicon (arm64) and universal (arm64 + Intel, for every Mac).
 # Run it from the Actions tab ("Run workflow") or by pushing a tag v*.
-# The DMG (unsigned, ad-hoc) is attached to the run as an artifact.
+# The DMGs (unsigned, ad-hoc) are attached to the run as artifacts.
 name: macOS build
 
 on:
@@ -10,13 +11,25 @@ on:
 
 jobs:
   mac:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: arm64
+            runner: macos-15
+            archs: arm64
+          - flavor: universal
+            runner: macos-15-intel
+            archs: "arm64;x86_64"
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     env:
       QT_VERSION: "6.10.3"
       ORT_VERSION: "1.18.0"
       FFMPEG_VERSION: "7.1.1"
       MACOSX_DEPLOYMENT_TARGET: "13.0"
+      FLAVOR: ${{ matrix.flavor }}
+      ARCHS: ${{ matrix.archs }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,31 +56,55 @@ jobs:
           mkdir -p ort && (cd ort && unzip -q ../ort.nupkg)
           ORT="mixhouse_deps/onnxruntime-${ORT_VERSION}"
           mkdir -p "$ORT/lib" "$ORT/include"
-          cp ort/runtimes/osx-arm64/native/libonnxruntime.dylib "$ORT/lib/libonnxruntime.${ORT_VERSION}.dylib"
+          if [ "$FLAVOR" = universal ]; then
+            lipo -create ort/runtimes/osx-arm64/native/libonnxruntime.dylib ort/runtimes/osx-x64/native/libonnxruntime.dylib \
+              -output "$ORT/lib/libonnxruntime.${ORT_VERSION}.dylib"
+          else
+            cp ort/runtimes/osx-arm64/native/libonnxruntime.dylib "$ORT/lib/libonnxruntime.${ORT_VERSION}.dylib"
+          fi
           (cd "$ORT/lib" && ln -sf "libonnxruntime.${ORT_VERSION}.dylib" libonnxruntime.dylib)
           cp ort/build/native/include/*.h "$ORT/include/"
           otool -D "$ORT/lib/libonnxruntime.${ORT_VERSION}.dylib"
-          ls -la "$ORT/lib" "$ORT/include"
+          lipo -info "$ORT/lib/libonnxruntime.${ORT_VERSION}.dylib"
           curl -fsSL -o mixhouse_deps/beat_this/beat_this.onnx \
             "https://raw.githubusercontent.com/mosynthkey/beat_this_cpp/07ab790a9ec2/onnx/beat_this.onnx"
           ls -la mixhouse_deps/beat_this
-          shasum -a 256 mixhouse_deps/beat_this/beat_this.onnx
 
       - name: FFmpeg (LGPL, shared)
         run: |
           curl -fsSL -o ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
           tar xf ffmpeg.tar.xz
-          cd "ffmpeg-${FFMPEG_VERSION}"
-          ./configure --prefix="$PWD/../ffmpeg-out" --enable-shared --disable-static \
-            --disable-programs --disable-doc --disable-avdevice --disable-avfilter --disable-swscale \
-            --disable-network --disable-autodetect --enable-audiotoolbox \
-            --install-name-dir='@loader_path' --arch=arm64
-          make -j4
-          make install
-          mkdir -p ../dist/ffmpeg
-          cp -a ../ffmpeg-out/lib/*.dylib ../dist/ffmpeg/
-          cp LICENSE.md COPYING.LGPLv2.1 ../dist/ffmpeg/ 2>/dev/null || true
-          ls -la ../dist/ffmpeg
+          HOST="$(uname -m)"
+          build_ff() {   # $1 = arm64 | x86_64
+            local a="$1" src="$PWD/ffmpeg-${FFMPEG_VERSION}" out="$PWD/ffmpeg-out-$1"
+            local cross=""
+            [ "$a" != "$HOST" ] && cross="--enable-cross-compile --target-os=darwin --disable-asm"
+            mkdir -p "build-ff-$a" && cd "build-ff-$a"
+            "$src/configure" --prefix="$out" --enable-shared --disable-static \
+              --disable-programs --disable-doc --disable-avdevice --disable-avfilter --disable-swscale \
+              --disable-network --disable-autodetect --enable-audiotoolbox \
+              --install-name-dir='@loader_path' --arch="$a" $cross \
+              --cc="clang -arch $a" --extra-ldflags="-arch $a"
+            make -j4
+            make install
+            cd ..
+          }
+          mkdir -p dist/ffmpeg
+          if [ "$FLAVOR" = universal ]; then
+            build_ff arm64
+            build_ff x86_64
+            for f in ffmpeg-out-arm64/lib/*.dylib; do
+              n="$(basename "$f")"
+              if [ -L "$f" ]; then cp -a "$f" dist/ffmpeg/; else
+                lipo -create "$f" "ffmpeg-out-x86_64/lib/$n" -output "dist/ffmpeg/$n"; fi
+            done
+          else
+            build_ff arm64
+            cp -a ffmpeg-out-arm64/lib/*.dylib dist/ffmpeg/
+          fi
+          cp "ffmpeg-${FFMPEG_VERSION}/LICENSE.md" "ffmpeg-${FFMPEG_VERSION}/COPYING.LGPLv2.1" dist/ffmpeg/ 2>/dev/null || true
+          ls -la dist/ffmpeg
+          lipo -info dist/ffmpeg/libavformat.*.dylib | head -3
 
       - name: Configure
         run: |
@@ -79,25 +116,38 @@ jobs:
                    MIXTAPE_BUILD_ENGINE_TESTS MUSE_ENABLE_UNIT_TESTS; do
             TESTS_OFF="$TESTS_OFF -D$t=OFF"
           done
+          set +e
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
             -DCMAKE_INSTALL_PREFIX="$PWD/dist/stage" \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            "-DCMAKE_OSX_ARCHITECTURES=$ARCHS" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-            $TESTS_OFF
+            $TESTS_OFF 2>&1 | tee configure.log
+          st=${PIPESTATUS[0]}
+          if [ "$st" -ne 0 ]; then
+            echo "::error title=Configure failed::$(grep -B2 -A8 'CMake Error' configure.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+            exit "$st"
+          fi
 
       - name: Build
-        run: cmake --build build --parallel 3
+        run: |
+          set +e
+          cmake --build build --parallel 3 2>&1 | tee build.log | grep -E '^\[[0-9]+/[0-9]+\]' | awk 'NR % 200 == 0'
+          st=${PIPESTATUS[0]}
+          if [ "$st" -ne 0 ]; then
+            echo "::error title=Build failed::$(grep -E -A6 'error:|FAILED:|Undefined symbols|ld: ' build.log | head -n 60 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+            exit "$st"
+          fi
 
       - name: Install
-        run: cmake --install build
+        run: cmake --install build > install.log 2>&1 || { echo "::error title=Install failed::$(tail -n 30 install.log | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"; exit 1; }
 
       - name: Package (DMG)
         run: |
           chmod +x buildscripts/packaging/MacOS/make_inthemix_mac.sh
           set +e
-          buildscripts/packaging/MacOS/make_inthemix_mac.sh "$PWD/build" "$PWD/dist/stage" "$PWD/dist" 2>&1 | tee package.log
+          buildscripts/packaging/MacOS/make_inthemix_mac.sh "$PWD/build" "$PWD/dist/stage" "$PWD/dist" "$FLAVOR" 2>&1 | tee package.log
           st=${PIPESTATUS[0]}
           if [ "$st" -ne 0 ]; then
             # The end of the log as an annotation: readable without signing in.
@@ -107,12 +157,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: InTheMix-mac-arm64
+          name: InTheMix-mac-${{ matrix.flavor }}
           path: dist/*.dmg
           retention-days: 30
-
-      - name: Build log on failure
-        if: failure()
-        run: |
-          ls -la build || true
-          tail -n 200 build/CMakeFiles/CMakeError.log 2>/dev/null || true
