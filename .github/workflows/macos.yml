@@ -38,6 +38,12 @@ jobs:
       - name: Tools
         run: brew install ninja nasm pkg-config || true
 
+      - name: ccache (faster rebuilds)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: mac-${{ matrix.flavor }}
+          max-size: 4G
+
       - name: Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -123,6 +129,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$PWD/dist/stage" \
             "-DCMAKE_OSX_ARCHITECTURES=$ARCHS" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             $TESTS_OFF 2>&1 | tee configure.log
           st=${PIPESTATUS[0]}
           if [ "$st" -ne 0 ]; then
@@ -136,7 +143,8 @@ jobs:
           cmake --build build --parallel 3 2>&1 | tee build.log | grep -E '^\[[0-9]+/[0-9]+\]' | awk 'NR % 200 == 0'
           st=${PIPESTATUS[0]}
           if [ "$st" -ne 0 ]; then
-            echo "::error title=Build failed::$(grep -E -A6 'error:|FAILED:|Undefined symbols|ld: ' build.log | head -n 60 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+            { grep -E -B2 -A12 'error:|Undefined symbols|ld: error|ld: building for|clang: error' build.log | grep -v 'ld: warning' | head -n 70; echo '--- tail ---'; tail -n 25 build.log; } > err.txt
+            echo "::error title=Build failed::$(sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g' err.txt)"
             exit "$st"
           fi
 
