@@ -143,8 +143,17 @@ jobs:
           cmake --build build --parallel 3 2>&1 | tee build.log | grep -E '^\[[0-9]+/[0-9]+\]' | awk 'NR % 200 == 0'
           st=${PIPESTATUS[0]}
           if [ "$st" -ne 0 ]; then
-            { grep -E -B2 -A12 'error:|Undefined symbols|ld: error|ld: building for|clang: error' build.log | grep -v 'ld: warning' | head -n 70; echo '--- tail ---'; tail -n 25 build.log; } > err.txt
-            echo "::error title=Build failed::$(sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g' err.txt)"
+            { grep -E -A14 'error:|Undefined symbols|ld: error|ld: building for|clang: error' build.log | grep -v 'ld: warning' | head -n 30; } > err.txt
+            # One annotation per line (10 errors + 10 warnings + 10 notices per step):
+            # readable through the public API without signing in.
+            n=0
+            grep -v '^\s*$' err.txt | head -n 30 | while IFS= read -r line; do
+              n=$((n+1)); line="${line//%/%25}"
+              if [ $n -le 10 ]; then echo "::error title=Build $n::$line";
+              elif [ $n -le 20 ]; then echo "::warning title=Build $n::$line";
+              else echo "::notice title=Build $n::$line"; fi
+            done
+            cat err.txt >> "$GITHUB_STEP_SUMMARY"
             exit "$st"
           fi
 
