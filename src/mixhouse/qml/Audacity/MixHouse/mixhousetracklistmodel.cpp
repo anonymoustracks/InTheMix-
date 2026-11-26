@@ -3076,6 +3076,26 @@ void MixHouseTrackListModel::startExternalDragTracks(const std::vector<MixHouseT
         return;
     }
 
+    // InTheMix: a song dragged from Traktor, rekordbox, Lexicon or a folder on
+    // the computer is not in the Music Collection, so it was never analysed
+    // and landed in the mix without a beat grid, out of time. It joins the
+    // collection now, before the drop: the mix then sees an unanalysed library
+    // song, analyses it at once and beat-matches it when the analysis is done.
+    QStringList toCollection;
+    for (const MixHouseTrack& t : tracks) {
+        // Negative id: not a Music Collection row (an external library's song,
+        // or a file listed from a folder on the computer).
+        if (t.id < 0 && !t.filePath.isEmpty() && QFileInfo::exists(t.filePath)
+            && libraryIdForFile(t.filePath) < 0 && !toCollection.contains(t.filePath)) {
+            toCollection << t.filePath;
+        }
+    }
+    if (!toCollection.isEmpty() && library()) {
+        const IMixHouseLibrary::ScanResult added = library()->addTracksFromFiles(toCollection);
+        LOGI() << "InTheMix: " << toCollection.size() << " dragged song(s) from an external library joined the "
+               << "Music Collection to be analysed (" << added.added << " new)";
+    }
+
     QMimeData* mimeData = new QMimeData();
     mimeData->setUrls(urls);
     // Real mixxx's own sourceIdentifier (dragUrls()'s 3rd argument) --
