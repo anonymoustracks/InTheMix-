@@ -47,6 +47,11 @@ if [ -d "$OUT/ffmpeg" ]; then
 fi
 FFMPEG_DIR="$APP/Contents/Frameworks/ffmpeg"
 
+echo "== Drop Qt SQL drivers other than SQLite"
+# Mimer, ODBC, PostgreSQL, MySQL drivers link to client libraries that are not
+# on a user's Mac (libmimerapi.dylib in /usr/local/lib on the build machine).
+find "$APP/Contents" -path "*sqldrivers*" -name "libqsql*.dylib" ! -name "libqsqlite*.dylib" -print -delete
+
 echo "== Copy in libraries Qt's deploy step missed"
 FW="$APP/Contents/Frameworks"
 mkdir -p "$FW"
