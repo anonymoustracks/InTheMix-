@@ -95,6 +95,7 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\bin\{#AppExe}"
+Name: "{autoprograms}\{#AppName} User Guide"; Filename: "{app}\InTheMix-User-Guide.pdf"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\bin\{#AppExe}"; Tasks: desktopicon
 
 [INI]

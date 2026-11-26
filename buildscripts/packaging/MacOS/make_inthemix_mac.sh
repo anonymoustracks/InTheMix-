@@ -88,6 +88,9 @@ mkdir -p "$APP/Contents/Resources/licenses"
 cp "$ROOT/LICENSE.txt" "$APP/Contents/Resources/licenses/InTheMix-LICENSE.txt"
 cp "$ROOT/BUILDING-INTHEMIX.md" "$APP/Contents/Resources/licenses/THIRD-PARTY.md"
 
+echo "== User guide"
+cp "$ROOT/share/docs/InTheMix-User-Guide.pdf" "$APP/Contents/Resources/InTheMix-User-Guide.pdf"
+
 echo "== Remove debug symbols"
 find "$APP/Contents" -type d -name "*.dSYM" -prune -exec rm -rf {} +
 
@@ -107,6 +110,7 @@ rm -rf "$DMG_DIR"
 mkdir -p "$DMG_DIR"
 cp -R "$APP" "$DMG_DIR/"
 ln -s /Applications "$DMG_DIR/Applications"
+cp "$ROOT/share/docs/InTheMix-User-Guide.pdf" "$DMG_DIR/"
 cat > "$DMG_DIR/How to open InTheMix.txt" <<'TXT'
 InTheMix by Anonymous Tracks -- how to open it the first time
 

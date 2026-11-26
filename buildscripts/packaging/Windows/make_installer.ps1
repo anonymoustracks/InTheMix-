@@ -32,6 +32,8 @@ function Add-Licence($name, $file) {
     Copy-Item $file $d
 }
 Copy-Item "$src\LICENSE.txt" "$Stage\LICENSE.txt"
+# User guide: opened by Help > User Guide (looked up next to bin\).
+Copy-Item "$src\share\docs\InTheMix-User-Guide.pdf" "$Stage\InTheMix-User-Guide.pdf"
 Add-Licence "ffmpeg (LGPL)" "$FFmpeg\LICENSE.txt"
 Add-Licence "rubberband" "D:\InTheMix\build\_deps\rubberband-src\COPYING"
 Add-Licence "beat_this model" "$src\src\mixhouse\thirdparty\beat_this_model\LICENSE"

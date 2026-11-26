@@ -43,6 +43,11 @@
 #include "project/types/projecttypes.h"
 
 #include <QTimer>
+#include <QCoreApplication>
+#include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
+#include <QUrl>
 
 #include "platform/macos/macostextexpanderguard.h"
 
@@ -97,9 +102,9 @@ void ApplicationActionController::init()
     dispatcher()->reg(this, "show-shortcuts", this, &ApplicationActionController::openShortcutsListDialog);
     dispatcher()->reg(this, "show-licence", [this]() { interactive()->open("audacity://licence"); });
     dispatcher()->reg(this, "show-whats-new", [this]() { interactive()->open("audacity://whatsnew"); });
-    dispatcher()->reg(this, "glidemix-website", [this]() { platformInteractive()->openUrl(std::string("https://glidemix.com")); });
-    dispatcher()->reg(this, "glidemix-manual", [this]() { platformInteractive()->openUrl(std::string("https://glidemix.com/manual")); });
-    dispatcher()->reg(this, "glidemix-help", [this]() { platformInteractive()->openUrl(std::string("https://glidemix.com/help")); });
+    dispatcher()->reg(this, "glidemix-website", [this]() { platformInteractive()->openUrl(std::string("https://anonymoustracks.com/inthemix/")); });
+    dispatcher()->reg(this, "glidemix-manual", this, &ApplicationActionController::openUserGuide);
+    dispatcher()->reg(this, "glidemix-help", [this]() { platformInteractive()->openUrl(std::string("https://anonymoustracks.com/inthemix/")); });
     dispatcher()->reg(this, "online-handbook", this, &ApplicationActionController::openOnlineHandbookPage);
     dispatcher()->reg(this, "ask-help", this, &ApplicationActionController::openAskForHelpPage);
     dispatcher()->reg(this, "preference-dialog", this, &ApplicationActionController::openPreferencesDialog);
@@ -704,4 +709,25 @@ void ApplicationActionController::doGlobalEnter()
     }
 
     commandDispatcher()->dispatch(muse::ui::TRIGGER_CONTROL_COMMAND);
+}
+
+//! InTheMix: Help > User Guide opens the PDF shipped with the app
+//! (Windows: next to bin\, macOS: Contents/Resources), or the online copy.
+void ApplicationActionController::openUserGuide()
+{
+    const QString name = QStringLiteral("InTheMix-User-Guide.pdf");
+    const QDir dir(QCoreApplication::applicationDirPath());
+    const QStringList candidates {
+        dir.filePath(QStringLiteral("../") + name),
+        dir.filePath(QStringLiteral("../Resources/") + name),
+        dir.filePath(name),
+        dir.filePath(QStringLiteral("../share/docs/") + name),
+    };
+    for (const QString& path : candidates) {
+        if (QFileInfo::exists(path)) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).canonicalFilePath()));
+            return;
+        }
+    }
+    QDesktopServices::openUrl(QUrl(QStringLiteral("https://anonymoustracks.com/inthemix/") + name));
 }

@@ -153,15 +153,15 @@ const UiActionList ApplicationUiActions::m_actions = {
              //: Action title: shown as a menu item or a button label; keep it short
              TranslatableString("action", "InTheMix &website"),
              //: Action description: shown as a tooltip; can be a full sentence
-             TranslatableString("action_description", "Open glidemix.com")
+             TranslatableString("action_description", "Open anonymoustracks.com")
              ),
     UiAction("glidemix-manual",
              au::context::UiCtxAny,
              au::context::CTX_ANY,
              //: Action title: shown as a menu item or a button label; keep it short
-             TranslatableString("action", "InTheMix &Manual"),
+             TranslatableString("action", "&User Guide"),
              //: Action description: shown as a tooltip; can be a full sentence
-             TranslatableString("action_description", "The full InTheMix manual on glidemix.com")
+             TranslatableString("action_description", "Open the InTheMix User Guide (PDF)")
              ),
     UiAction("glidemix-help",
              au::context::UiCtxAny,

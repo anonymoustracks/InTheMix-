@@ -566,7 +566,6 @@ MenuItem* AppMenuModel::makeHelpMenu()
         //! Help rather than being hoisted up beside it.
         makeMenuItem("glidemix-manual"),
         makeMenuItem("show-onboarding"),
-        makeMenuItem("glidemix-help"),
         makeMenuItem("glidemix-website"),
         makeSeparator(),
         makeMenuItem("show-licence"),

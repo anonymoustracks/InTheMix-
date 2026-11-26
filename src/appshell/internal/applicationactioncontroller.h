@@ -116,6 +116,7 @@ private:
     void openAboutQtDialog();
 
     void openOnlineHandbookPage();
+    void openUserGuide();
     void openAskForHelpPage();
     void openPreferencesDialog();
     void openAudioSettingsDialog();
