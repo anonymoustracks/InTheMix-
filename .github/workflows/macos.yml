@@ -133,7 +133,7 @@ jobs:
             $TESTS_OFF 2>&1 | tee configure.log
           st=${PIPESTATUS[0]}
           if [ "$st" -ne 0 ]; then
-            echo "::error title=Configure failed::$(grep -B2 -A8 'CMake Error' configure.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+            echo "::error title=Configure failed::$(grep -B2 -A8 'CMake Error' configure.log | tail -n 40 | tr '\n' '|' | sed 's/%/%25/g')"
             exit "$st"
           fi
 
@@ -158,7 +158,7 @@ jobs:
           fi
 
       - name: Install
-        run: cmake --install build > install.log 2>&1 || { echo "::error title=Install failed::$(tail -n 30 install.log | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"; exit 1; }
+        run: cmake --install build > install.log 2>&1 || { echo "::error title=Install failed::$(tail -n 30 install.log | tr '\n' '|' | sed 's/%/%25/g')"; exit 1; }
 
       - name: Package (DMG)
         run: |
@@ -168,7 +168,7 @@ jobs:
           st=${PIPESTATUS[0]}
           if [ "$st" -ne 0 ]; then
             # The end of the log as an annotation: readable without signing in.
-            echo "::error title=Package failed::$(tail -n 40 package.log | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+            echo "::error title=Package failed::$(tail -n 40 package.log | tr '\n' '|' | sed 's/%/%25/g')"
             exit "$st"
           fi
 

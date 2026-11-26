@@ -46,6 +46,8 @@ elseif (APPLE)
     # InTheMix: Intel / universal Mac builds (arm64 alone uses the vendored libraries).
     target_compile_definitions(glidemix_rubberband PRIVATE HAVE_POSIX_MEMALIGN)
     target_compile_options(glidemix_rubberband PRIVATE -w)
+    # The single-file build picks Apple's vDSP FFT on macOS.
+    target_link_libraries(glidemix_rubberband PUBLIC "-framework Accelerate")
 elseif (NOT APPLE)
     target_compile_definitions(glidemix_rubberband PRIVATE HAVE_POSIX_MEMALIGN)
     target_compile_options(glidemix_rubberband PRIVATE -w)
