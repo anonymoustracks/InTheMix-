@@ -729,5 +729,5 @@ void ApplicationActionController::openUserGuide()
             return;
         }
     }
-    QDesktopServices::openUrl(QUrl(QStringLiteral("https://anonymoustracks.com/inthemix/") + name));
+    QDesktopServices::openUrl(QUrl(QStringLiteral("https://anonymoustracks.com/inthemix-update/") + name));
 }
